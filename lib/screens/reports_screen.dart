@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
@@ -6,8 +5,9 @@ import '../providers/attendance_provider.dart';
 import '../providers/children_provider.dart';
 import '../constants/app_colors.dart';
 import '../constants/app_text_styles.dart';
+import '../utils/logger.dart';
 import 'monthly_report_screen.dart';
-
+// New screen for service details
 
 class ReportsScreen extends StatefulWidget {
   const ReportsScreen({super.key});
@@ -18,7 +18,7 @@ class ReportsScreen extends StatefulWidget {
 
 class _ReportsScreenState extends State<ReportsScreen> {
   bool _showArchive = false;
-  final int _maxFutureMonths = 12; // Show up to 12 months in the future
+  final int _maxFutureMonths = 1; // Only show current month plus 1 future month
   bool _isLoadingAttendance = true;
   Map<int, int> _attendanceData = {};
 
@@ -26,9 +26,22 @@ class _ReportsScreenState extends State<ReportsScreen> {
   void initState() {
     super.initState();
     _loadAttendanceData();
+    _loadArchivedMonths();
+  }
+
+  Future<void> _loadArchivedMonths() async {
+    try {
+      final attendanceProvider =
+          Provider.of<AttendanceProvider>(context, listen: false);
+      await attendanceProvider.loadArchivedMonths();
+    } catch (e) {
+      Logger.error('Error loading archived months', e);
+    }
   }
 
   Future<void> _loadAttendanceData() async {
+    if (!mounted) return;
+
     setState(() => _isLoadingAttendance = true);
 
     try {
@@ -49,14 +62,17 @@ class _ReportsScreenState extends State<ReportsScreen> {
       final data = await attendanceProvider.getAttendanceCountByChild(
           childIds, startDate, endDate);
 
+      if (!mounted) return;
+
       setState(() {
         _attendanceData = data;
         _isLoadingAttendance = false;
       });
     } catch (e) {
-      if (kDebugMode) {
-        print('Error loading attendance data: $e');
-      }
+      Logger.error('Error loading attendance data', e);
+
+      if (!mounted) return;
+
       setState(() => _isLoadingAttendance = false);
     }
   }
@@ -68,20 +84,42 @@ class _ReportsScreenState extends State<ReportsScreen> {
     final currentMonth = now.month;
 
     final childrenProvider = Provider.of<ChildrenProvider>(context);
+    final attendanceProvider = Provider.of<AttendanceProvider>(context);
     final children = childrenProvider.children;
 
-    // Create list of future months
-    List<Widget> futureMonths = [];
+    // Get archived months data
+    List<Map<String, dynamic>> archivedMonthsData =
+        attendanceProvider.archivedMonths;
+
+    // Create list of accessible months (current month + 1 future month)
+    List<Widget> accessibleMonths = [];
     for (int i = 0; i < _maxFutureMonths; i++) {
       final futureMonth = (currentMonth + i) % 12;
       final futureYear = currentYear + ((currentMonth + i) ~/ 12);
       final actualMonth = futureMonth == 0 ? 12 : futureMonth;
 
-      futureMonths.add(
+      accessibleMonths.add(
         _MonthCard(
           year: futureYear,
           month: actualMonth,
           isCurrentMonth: i == 0,
+          isAccessible: true,
+        ),
+      );
+    }
+
+    // Create list of inaccessible future months (just visual, not accessible)
+    List<Widget> inaccessibleMonths = [];
+    for (int i = _maxFutureMonths; i < 11; i++) {
+      final futureMonth = (currentMonth + i) % 12;
+      final futureYear = currentYear + ((currentMonth + i) ~/ 12);
+      final actualMonth = futureMonth == 0 ? 12 : futureMonth;
+
+      inaccessibleMonths.add(
+        _MonthCard(
+          year: futureYear,
+          month: actualMonth,
+          isAccessible: false,
         ),
       );
     }
@@ -89,22 +127,35 @@ class _ReportsScreenState extends State<ReportsScreen> {
     // Create list of archived months
     List<Widget> archivedMonths = [];
     if (_showArchive) {
-      // Add 24 previous months to archive
-      for (int i = 1; i <= 24; i++) {
-        int archiveMonth = currentMonth - i;
-        int archiveYear = currentYear;
-
-        while (archiveMonth <= 0) {
-          archiveMonth += 12;
-          archiveYear -= 1;
-        }
-
+      if (archivedMonthsData.isEmpty) {
+        // No archived months
         archivedMonths.add(
-          _MonthCard(
-            year: archiveYear,
-            month: archiveMonth,
+          const Padding(
+            padding: EdgeInsets.all(16.0),
+            child: Center(
+              child: Text(
+                'No archived reports found',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: AppColors.textSecondary,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+            ),
           ),
         );
+      } else {
+        // Show archived months
+        for (var monthData in archivedMonthsData) {
+          archivedMonths.add(
+            _MonthCard(
+              year: monthData['year'],
+              month: monthData['month'],
+              isArchived: true,
+              isAccessible: true,
+            ),
+          );
+        }
       }
     }
 
@@ -112,51 +163,35 @@ class _ReportsScreenState extends State<ReportsScreen> {
       backgroundColor: AppColors.background,
       body: CustomScrollView(
         slivers: [
-          // App bar
+          // App bar - FIXED to remove duplicate title
           SliverAppBar(
             expandedHeight: 130.0,
             pinned: true,
             backgroundColor: AppColors.primary,
+            title: const Text('Attendance Reports'),
             flexibleSpace: FlexibleSpaceBar(
+              // Remove the title here to avoid duplication
+              titlePadding: EdgeInsets.zero,
               background: Container(
                 decoration: const BoxDecoration(
                   gradient: AppColors.primaryGradient,
                 ),
-                child: const SafeArea(
-                  child: Padding(
-                    padding: EdgeInsets.fromLTRB(20, 60, 20, 20),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Attendance Reports',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 24,
-                            fontWeight: FontWeight.bold,
-                          ),
+                child: const Padding(
+                  padding: EdgeInsets.fromLTRB(20, 80, 20, 20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SizedBox(
+                          height: 24), // Space for the title in the app bar
+                      Text(
+                        'Track attendance trends and history',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w300,
                         ),
-                        SizedBox(height: 8),
-                        Text(
-                          'Track attendance trends and history',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 14,
-                            fontWeight: FontWeight.w300,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-              title: const Padding(
-                padding: EdgeInsets.only(left: 16.0),
-                child: Text(
-                  'Attendance Reports',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -176,7 +211,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                   ),
                   SizedBox(width: 8),
                   Text(
-                    'Monthly Reports',
+                    'Current & Upcoming Month',
                     style: AppTextStyles.heading3,
                   ),
                 ],
@@ -184,19 +219,60 @@ class _ReportsScreenState extends State<ReportsScreen> {
             ),
           ),
 
-          // Future months list
+          // Accessible months list
           SliverList(
             delegate: SliverChildBuilderDelegate(
               (context, index) {
-                if (index >= futureMonths.length) return null;
+                if (index >= accessibleMonths.length) return null;
                 return Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 20),
-                  child: futureMonths[index],
+                  child: accessibleMonths[index],
                 );
               },
-              childCount: futureMonths.length,
+              childCount: accessibleMonths.length,
             ),
           ),
+
+          // Inaccessible future months section
+          if (inaccessibleMonths.isNotEmpty)
+            const SliverToBoxAdapter(
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(20, 24, 20, 8),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.lock_clock,
+                      color: AppColors.textSecondary,
+                      size: 18,
+                    ),
+                    SizedBox(width: 8),
+                    Text(
+                      'Future Months (Not Yet Available)',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+          // Inaccessible future months list
+          if (inaccessibleMonths.isNotEmpty)
+            SliverList(
+              delegate: SliverChildBuilderDelegate(
+                (context, index) {
+                  if (index >= inaccessibleMonths.length) return null;
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: inaccessibleMonths[index],
+                  );
+                },
+                childCount: inaccessibleMonths.length,
+              ),
+            ),
 
           // Archive section
           SliverToBoxAdapter(
@@ -433,11 +509,15 @@ class _MonthCard extends StatelessWidget {
   final int year;
   final int month;
   final bool isCurrentMonth;
+  final bool isArchived;
+  final bool isAccessible;
 
   const _MonthCard({
     required this.year,
     required this.month,
     this.isCurrentMonth = false,
+    this.isArchived = false,
+    this.isAccessible = true,
   });
 
   @override
@@ -450,11 +530,11 @@ class _MonthCard extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: isAccessible ? Colors.white : Colors.grey.shade50,
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withOpacity(isAccessible ? 0.05 : 0.02),
             blurRadius: 8,
             offset: const Offset(0, 2),
           ),
@@ -465,172 +545,417 @@ class _MonthCard extends StatelessWidget {
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(isCurrentMonth ? 10 : 12),
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => MonthlyReportScreen(
-                    year: year,
-                    month: month,
-                  ),
-                ),
-              );
-            },
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Row(
-                children: [
-                  // Month badge
-                  Container(
-                    width: 48,
-                    height: 48,
-                    decoration: BoxDecoration(
-                      color: isCurrentMonth
-                          ? AppColors.primary
-                          : Colors.grey.shade100,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Text(
-                            month.toString(),
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                              color: isCurrentMonth
-                                  ? Colors.white
-                                  : AppColors.textPrimary,
-                            ),
-                          ),
-                          Text(
-                            year.toString(),
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: isCurrentMonth
-                                  ? Colors.white.withOpacity(0.8)
-                                  : AppColors.textSecondary,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  // Month info
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '$monthName $year',
-                          style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                          ),
+        child: Dismissible(
+          key: Key('month_${year}_$month'),
+          direction:
+              isArchived ? DismissDirection.endToStart : DismissDirection.none,
+          confirmDismiss: isArchived
+              ? (direction) async {
+                  return await showDialog(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      title: const Text('Confirm Deletion'),
+                      content: Text(
+                          'Are you sure you want to delete the report for $monthName $year?'),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.of(ctx).pop(false),
+                          child: const Text('Cancel'),
                         ),
-                        const SizedBox(height: 4),
-                        FutureBuilder(
-                          future: Provider.of<AttendanceProvider>(context,
-                                  listen: false)
-                              .getMonthlyAttendanceCount(year, month),
-                          builder: (context, snapshot) {
-                            if (snapshot.connectionState ==
-                                ConnectionState.waiting) {
-                              return const Row(
-                                children: [
-                                  SizedBox(
-                                    width: 10,
-                                    height: 10,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: AppColors.textLight,
-                                    ),
-                                  ),
-                                  SizedBox(width: 8),
-                                  Text(
-                                    'Loading...',
-                                    style: TextStyle(
-                                      fontSize: 14,
-                                      color: AppColors.textSecondary,
-                                    ),
-                                  ),
-                                ],
-                              );
-                            }
-
-                            if (snapshot.hasError) {
-                              return const Text(
-                                'Error loading data',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color: AppColors.error,
-                                ),
-                              );
-                            }
-
-                            final data = snapshot.data as Map<String, int>;
-                            final serviceCount = data.length;
-
-                            if (isPastOrPresent) {
-                              return Row(
-                                children: [
-                                  Icon(
-                                    serviceCount > 0
-                                        ? Icons.check_circle
-                                        : Icons.calendar_month,
-                                    size: 14,
-                                    color: serviceCount > 0
-                                        ? AppColors.success
-                                        : AppColors.textSecondary,
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Text(
-                                    serviceCount > 0
-                                        ? '$serviceCount services recorded'
-                                        : 'No services recorded',
-                                    style: const TextStyle(
-                                      fontSize: 14,
-                                      color: AppColors.textSecondary,
-                                    ),
-                                  ),
-                                ],
-                              );
-                            } else {
-                              // Future month
-                              return const Row(
-                                children: [
-                                  Icon(
-                                    Icons.event_available_outlined,
-                                    size: 14,
-                                    color: AppColors.textSecondary,
-                                  ),
-                                  SizedBox(width: 6),
-                                  Text(
-                                    'Upcoming month',
-                                    style: TextStyle(
-                                      fontSize: 14,
-                                      color: AppColors.textSecondary,
-                                    ),
-                                  ),
-                                ],
-                              );
-                            }
-                          },
+                        TextButton(
+                          onPressed: () => Navigator.of(ctx).pop(true),
+                          child: const Text('Delete',
+                              style: TextStyle(color: Colors.red)),
                         ),
                       ],
                     ),
+                  );
+                }
+              : null,
+          background: Container(
+            color: Colors.red,
+            alignment: Alignment.centerRight,
+            padding: const EdgeInsets.only(right: 16.0),
+            child: const Icon(
+              Icons.delete,
+              color: Colors.white,
+            ),
+          ),
+          onDismissed: isArchived
+              ? (direction) async {
+                  // Store context-related objects before the async gap
+                  final scaffoldMsgr = ScaffoldMessenger.of(context);
+                  final attendanceProvider =
+                      Provider.of<AttendanceProvider>(context, listen: false);
+                  final isMounted = context.mounted;
+
+                  try {
+                    // Delete the month report
+                    await attendanceProvider.deleteMonthReport(year, month);
+
+                    // Check if widget is still mounted after the async operation
+                    if (isMounted && context.mounted) {
+                      scaffoldMsgr.showSnackBar(
+                        SnackBar(
+                          content: Text('Deleted report for $monthName $year'),
+                          backgroundColor: Colors.red,
+                        ),
+                      );
+                    }
+                  } catch (e) {
+                    Logger.error('Error deleting report on dismiss', e);
+
+                    // Check if widget is still mounted after the async operation
+                    if (isMounted && context.mounted) {
+                      scaffoldMsgr.showSnackBar(
+                        SnackBar(
+                          content: Text('Failed to delete: $e'),
+                          backgroundColor: Colors.red,
+                        ),
+                      );
+                    }
+                  }
+                }
+              : null,
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: isAccessible
+                  ? () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => MonthlyReportScreen(
+                            year: year,
+                            month: month,
+                          ),
+                        ),
+                      );
+                    }
+                  : null,
+              onLongPress: isArchived
+                  ? () {
+                      showDialog(
+                        context: context,
+                        builder: (ctx) => AlertDialog(
+                          title: const Text('Report Actions'),
+                          content: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text('$monthName $year'),
+                              const SizedBox(height: 8),
+                              ListTile(
+                                leading: const Icon(Icons.restore),
+                                title: const Text('Restore to Active'),
+                                onTap: () async {
+                                  // Store context-related objects before the async gap
+                                  final scaffoldMsgr =
+                                      ScaffoldMessenger.of(context);
+                                  final navigationCtx = Navigator.of(ctx);
+                                  final attendanceProvider =
+                                      Provider.of<AttendanceProvider>(context,
+                                          listen: false);
+                                  final isMounted = context.mounted;
+
+                                  try {
+                                    await attendanceProvider.restoreMonthReport(
+                                        year, month);
+
+                                    // Check if widget is still mounted after the async operation
+                                    if (isMounted && context.mounted) {
+                                      navigationCtx.pop();
+                                      scaffoldMsgr.showSnackBar(
+                                        SnackBar(
+                                          content: Text(
+                                              'Restored $monthName $year to active reports'),
+                                        ),
+                                      );
+                                    }
+                                  } catch (e) {
+                                    Logger.error('Error restoring report', e);
+
+                                    // Check if widget is still mounted after the async operation
+                                    if (isMounted && context.mounted) {
+                                      navigationCtx.pop();
+                                      scaffoldMsgr.showSnackBar(
+                                        SnackBar(
+                                          content:
+                                              Text('Failed to restore: $e'),
+                                          backgroundColor: Colors.red,
+                                        ),
+                                      );
+                                    }
+                                  }
+                                },
+                              ),
+                              ListTile(
+                                leading:
+                                    const Icon(Icons.delete, color: Colors.red),
+                                title: const Text('Delete',
+                                    style: TextStyle(color: Colors.red)),
+                                onTap: () {
+                                  Navigator.pop(ctx);
+                                  // Show delete confirmation
+                                  showDialog(
+                                    context: context,
+                                    builder: (ctx) => AlertDialog(
+                                      title: const Text('Confirm Deletion'),
+                                      content: Text(
+                                          'Are you sure you want to delete the report for $monthName $year?'),
+                                      actions: [
+                                        TextButton(
+                                          onPressed: () =>
+                                              Navigator.of(ctx).pop(),
+                                          child: const Text('Cancel'),
+                                        ),
+                                        TextButton(
+                                          onPressed: () async {
+                                            // Store context-related objects before the async gap
+                                            final scaffoldMsgr =
+                                                ScaffoldMessenger.of(context);
+                                            final navigationCtx =
+                                                Navigator.of(ctx);
+                                            final attendanceProvider =
+                                                Provider.of<AttendanceProvider>(
+                                                    context,
+                                                    listen: false);
+                                            final isMounted = context.mounted;
+
+                                            try {
+                                              await attendanceProvider
+                                                  .deleteMonthReport(
+                                                      year, month);
+
+                                              // Check if widget is still mounted after the async operation
+                                              if (isMounted &&
+                                                  context.mounted) {
+                                                navigationCtx.pop();
+                                                scaffoldMsgr.showSnackBar(
+                                                  SnackBar(
+                                                    content: Text(
+                                                        'Deleted report for $monthName $year'),
+                                                    backgroundColor: Colors.red,
+                                                  ),
+                                                );
+                                              }
+                                            } catch (e) {
+                                              Logger.error(
+                                                  'Error deleting report', e);
+
+                                              // Check if widget is still mounted after the async operation
+                                              if (isMounted &&
+                                                  context.mounted) {
+                                                navigationCtx.pop();
+                                                scaffoldMsgr.showSnackBar(
+                                                  SnackBar(
+                                                    content: Text(
+                                                        'Failed to delete: $e'),
+                                                    backgroundColor: Colors.red,
+                                                  ),
+                                                );
+                                              }
+                                            }
+                                          },
+                                          child: const Text('Delete',
+                                              style:
+                                                  TextStyle(color: Colors.red)),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                },
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    }
+                  : null,
+              child: Opacity(
+                opacity: isAccessible ? 1.0 : 0.5,
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Row(
+                    children: [
+                      // Month badge
+                      Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          color: isCurrentMonth
+                              ? AppColors.primary
+                              : (isArchived
+                                  ? Colors.grey.shade300
+                                  : Colors.grey.shade100),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Text(
+                                month.toString(),
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                  color: isCurrentMonth
+                                      ? Colors.white
+                                      : AppColors.textPrimary,
+                                ),
+                              ),
+                              Text(
+                                year.toString(),
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: isCurrentMonth
+                                      ? Colors.white.withOpacity(0.8)
+                                      : AppColors.textSecondary,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      // Month info
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '$monthName $year',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                                color: isAccessible
+                                    ? AppColors.textPrimary
+                                    : AppColors.textSecondary,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            if (!isAccessible)
+                              const Row(
+                                children: [
+                                  Icon(Icons.lock_outline,
+                                      size: 14, color: AppColors.textLight),
+                                  SizedBox(width: 6),
+                                  Text(
+                                    'Not yet available',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      color: AppColors.textLight,
+                                    ),
+                                  ),
+                                ],
+                              )
+                            else
+                              FutureBuilder(
+                                future: Provider.of<AttendanceProvider>(context,
+                                        listen: false)
+                                    .getMonthlyAttendanceCount(year, month),
+                                builder: (context, snapshot) {
+                                  if (snapshot.connectionState ==
+                                      ConnectionState.waiting) {
+                                    return const Row(
+                                      children: [
+                                        SizedBox(
+                                          width: 10,
+                                          height: 10,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                            color: AppColors.textLight,
+                                          ),
+                                        ),
+                                        SizedBox(width: 8),
+                                        Text(
+                                          'Loading...',
+                                          style: TextStyle(
+                                            fontSize: 14,
+                                            color: AppColors.textSecondary,
+                                          ),
+                                        ),
+                                      ],
+                                    );
+                                  }
+
+                                  if (snapshot.hasError) {
+                                    return const Text(
+                                      'Error loading data',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        color: AppColors.error,
+                                      ),
+                                    );
+                                  }
+
+                                  final data =
+                                      snapshot.data as Map<String, int>;
+                                  final serviceCount = data.length;
+
+                                  if (isPastOrPresent) {
+                                    return Row(
+                                      children: [
+                                        Icon(
+                                          serviceCount > 0
+                                              ? Icons.check_circle
+                                              : Icons.calendar_month,
+                                          size: 14,
+                                          color: serviceCount > 0
+                                              ? AppColors.success
+                                              : AppColors.textSecondary,
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Text(
+                                          serviceCount > 0
+                                              ? '$serviceCount services recorded'
+                                              : 'No services recorded',
+                                          style: const TextStyle(
+                                            fontSize: 14,
+                                            color: AppColors.textSecondary,
+                                          ),
+                                        ),
+                                      ],
+                                    );
+                                  } else {
+                                    // Future month
+                                    return const Row(
+                                      children: [
+                                        Icon(
+                                          Icons.event_available_outlined,
+                                          size: 14,
+                                          color: AppColors.textSecondary,
+                                        ),
+                                        SizedBox(width: 6),
+                                        Text(
+                                          'Upcoming month',
+                                          style: TextStyle(
+                                            fontSize: 14,
+                                            color: AppColors.textSecondary,
+                                          ),
+                                        ),
+                                      ],
+                                    );
+                                  }
+                                },
+                              ),
+                          ],
+                        ),
+                      ),
+                      // Arrow or lock icon
+                      if (isAccessible)
+                        Icon(
+                          isArchived ? Icons.history : Icons.chevron_right,
+                          color: AppColors.textSecondary,
+                        )
+                      else
+                        const Icon(
+                          Icons.lock_outline,
+                          color: AppColors.textLight,
+                          size: 18,
+                        ),
+                    ],
                   ),
-                  // Arrow
-                  const Icon(
-                    Icons.chevron_right,
-                    color: AppColors.textSecondary,
-                  ),
-                ],
+                ),
               ),
             ),
           ),

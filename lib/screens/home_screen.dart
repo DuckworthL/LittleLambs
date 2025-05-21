@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
+import 'package:flutter/foundation.dart';
 import '../providers/attendance_provider.dart';
 import '../providers/children_provider.dart';
+import '../providers/points_provider.dart';
 import '../constants/app_colors.dart';
 import '../constants/app_text_styles.dart';
 import '../widgets/gradient_button.dart';
@@ -13,8 +15,40 @@ import 'reports_screen.dart';
 import 'manage_children_screen.dart';
 import 'settings_screen.dart';
 
-class HomeScreen extends StatelessWidget {
+class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  @override
+  void initState() {
+    super.initState();
+    _initializeData();
+  }
+
+  Future<void> _initializeData() async {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      try {
+        final childrenProvider =
+            Provider.of<ChildrenProvider>(context, listen: false);
+        final attendanceProvider =
+            Provider.of<AttendanceProvider>(context, listen: false);
+        final pointsProvider =
+            Provider.of<PointsProvider>(context, listen: false);
+
+        await childrenProvider.fetchAndSetChildren();
+        await attendanceProvider.loadArchivedMonths();
+        await pointsProvider.fetchPoints();
+      } catch (e) {
+        if (kDebugMode) {
+          print('Error initializing data: $e');
+        }
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -70,38 +104,22 @@ class HomeScreen extends StatelessWidget {
                         ),
                         const Spacer(),
                         // Stats row
-                        FutureBuilder(
-                          future: childrenProvider.fetchAndSetChildren(),
-                          builder: (ctx, snapshot) {
-                            if (snapshot.connectionState ==
-                                ConnectionState.waiting) {
-                              return const SizedBox(
-                                height: 20,
-                                width: 20,
-                                child: CircularProgressIndicator(
-                                  color: Colors.white,
-                                  strokeWidth: 2,
-                                ),
-                              );
-                            }
-                            return Row(
-                              children: [
-                                _buildStatCard(
-                                  context,
-                                  '${childrenProvider.children.length}',
-                                  'Children',
-                                  Icons.people,
-                                ),
-                                const SizedBox(width: 16),
-                                _buildStatCard(
-                                  context,
-                                  '${childrenProvider.groups.length}',
-                                  'Groups',
-                                  Icons.category,
-                                ),
-                              ],
-                            );
-                          },
+                        Row(
+                          children: [
+                            _buildStatCard(
+                              context,
+                              '${childrenProvider.children.length}',
+                              'Children',
+                              Icons.people,
+                            ),
+                            const SizedBox(width: 16),
+                            _buildStatCard(
+                              context,
+                              '${childrenProvider.groups.length}',
+                              'Groups',
+                              Icons.category,
+                            ),
+                          ],
                         ),
                       ],
                     ),
@@ -141,14 +159,14 @@ class HomeScreen extends StatelessWidget {
 
                   _buildActionButton(
                     context,
-                    'Add Points',
+                    'Manage Points',
                     Icons.stars_rounded,
                     AppColors.accentGradient,
                     () {
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (context) => const AddPointsScreen(),
+                          builder: (context) => const ViewPointsScreen(),
                         ),
                       );
                     },
@@ -171,14 +189,14 @@ class HomeScreen extends StatelessWidget {
                     children: [
                       _buildActionCard(
                         context,
-                        'View Points',
-                        Icons.leaderboard_rounded,
+                        'Add Points',
+                        Icons.add_circle_outline_rounded,
                         Colors.amber,
                         () {
                           Navigator.push(
                             context,
                             MaterialPageRoute(
-                              builder: (context) => const ViewPointsScreen(),
+                              builder: (context) => const AddPointsScreen(),
                             ),
                           );
                         },

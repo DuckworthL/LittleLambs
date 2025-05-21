@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../providers/children_provider.dart';
-import '../models/child.dart';
 import '../constants/app_colors.dart';
-import '../constants/app_text_styles.dart';
+import '../providers/children_provider.dart';
+import '../utils/logger.dart';
+import '../models/child.dart';
 
 class ManageChildrenScreen extends StatefulWidget {
   const ManageChildrenScreen({super.key});
@@ -12,805 +12,1036 @@ class ManageChildrenScreen extends StatefulWidget {
   State<ManageChildrenScreen> createState() => _ManageChildrenScreenState();
 }
 
-class _ManageChildrenScreenState extends State<ManageChildrenScreen>
-    with TickerProviderStateMixin {
+class _ManageChildrenScreenState extends State<ManageChildrenScreen> with SingleTickerProviderStateMixin {
+  late TabController _tabController;
   bool _isLoading = true;
-  TabController? _tabController;
-  final TextEditingController _searchController = TextEditingController();
-  String _searchQuery = '';
-  bool _isSearching = false;
-
+  
   @override
   void initState() {
     super.initState();
-    _loadChildren();
-    _searchController.addListener(() {
-      setState(() {
-        _searchQuery = _searchController.text;
-      });
-    });
+    _tabController = TabController(length: 2, vsync: this);
+    _loadData();
   }
-
+  
   @override
   void dispose() {
-    _tabController?.dispose();
-    _searchController.dispose();
+    _tabController.dispose();
     super.dispose();
   }
-
-  Future<void> _loadChildren() async {
+  
+  Future<void> _loadData() async {
     setState(() => _isLoading = true);
-
-    final childrenProvider =
-        Provider.of<ChildrenProvider>(context, listen: false);
-    await childrenProvider.fetchAndSetChildren();
-
-    _tabController?.dispose();
-    if (childrenProvider.groups.isNotEmpty) {
-      _tabController = TabController(
-        length: childrenProvider.groups.length + 1, // +1 for "All" tab
-        vsync: this,
-      );
+    
+    try {
+      final childrenProvider = Provider.of<ChildrenProvider>(context, listen: false);
+      await childrenProvider.fetchAndSetChildren();
+    } catch (e) {
+      Logger.error('Error loading children data', e);
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
-
-    setState(() => _isLoading = false);
   }
-
+  
   @override
   Widget build(BuildContext context) {
-    final childrenProvider = Provider.of<ChildrenProvider>(context);
-    final allGroups = ['All', ...childrenProvider.groups];
-
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
-        title: _isSearching
-            ? TextField(
-                controller: _searchController,
-                autofocus: true,
-                decoration: InputDecoration(
-                  hintText: 'Search children...',
-                  hintStyle: TextStyle(color: Colors.white.withOpacity(0.8)),
-                  border: InputBorder.none,
-                ),
-                style: const TextStyle(color: Colors.white),
-              )
-            : const Text('Manage Children'),
+        title: const Text('Manage Children'),
         backgroundColor: AppColors.primary,
         foregroundColor: Colors.white,
         elevation: 0,
-        actions: [
-          IconButton(
-            icon: Icon(_isSearching ? Icons.close : Icons.search),
-            onPressed: () {
-              setState(() {
-                _isSearching = !_isSearching;
-                if (!_isSearching) {
-                  _searchController.clear();
-                }
-              });
-            },
-          ),
-        ],
-        bottom: _isLoading
-            ? null
-            : (allGroups.length > 1 && _tabController != null)
-                ? PreferredSize(
-                    preferredSize: const Size.fromHeight(48),
-                    child: Container(
-                      height: 40,
-                      margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.15),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: TabBar(
-                        controller: _tabController,
-                        isScrollable: true,
-                        indicatorSize: TabBarIndicatorSize.tab,
-                        indicator: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        labelColor: AppColors.primary,
-                        unselectedLabelColor: Colors.white,
-                        labelStyle: const TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 12,
-                        ),
-                        unselectedLabelStyle: const TextStyle(
-                          fontWeight: FontWeight.normal,
-                          fontSize: 12,
-                        ),
-                        tabs:
-                            allGroups.map((group) => Tab(text: group)).toList(),
-                      ),
-                    ),
-                  )
-                : null,
+        bottom: TabBar(
+          controller: _tabController,
+          indicatorColor: Colors.white,
+          tabs: const [
+            Tab(text: 'Children'),
+            Tab(text: 'Groups'),
+          ],
+        ),
       ),
-      body: _isLoading
-          ? const Center(
-              child: CircularProgressIndicator(color: AppColors.primary),
-            )
-          : childrenProvider.children.isEmpty
-              ? _EmptyChildrenState()
-              : _tabController == null
-                  ? const Center(child: Text('Error initializing tabs'))
-                  : Column(
-                      children: [
-                        Expanded(
-                          child: TabBarView(
-                            controller: _tabController,
-                            children: [
-                              // "All" tab
-                              _buildChildrenList(
-                                childrenProvider.children
-                                    .where((child) =>
-                                        _searchQuery.isEmpty ||
-                                        child.name.toLowerCase().contains(
-                                            _searchQuery.toLowerCase()))
-                                    .toList(),
-                              ),
-                              // Group-specific tabs
-                              ...childrenProvider.groups.map((group) {
-                                return _buildChildrenList(
-                                  childrenProvider
-                                      .getChildrenByGroup(group)
-                                      .where((child) =>
-                                          _searchQuery.isEmpty ||
-                                          child.name.toLowerCase().contains(
-                                              _searchQuery.toLowerCase()))
-                                      .toList(),
-                                );
-                              }),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
       floatingActionButton: FloatingActionButton(
-        onPressed: () => _showAddChildDialog(),
-        backgroundColor: AppColors.accent,
-        foregroundColor: Colors.white,
+        onPressed: () {
+          _tabController.index == 0
+              ? _showAddChildDialog(context)
+              : _showAddGroupDialog(context);
+        },
+        backgroundColor: AppColors.primary,
         child: const Icon(Icons.add),
       ),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : TabBarView(
+              controller: _tabController,
+              children: [
+                _buildChildrenTab(),
+                _buildGroupsTab(),
+              ],
+            ),
     );
   }
-
-  Widget _buildChildrenList(List<Child> children) {
+  
+  Widget _buildChildrenTab() {
+    final childrenProvider = Provider.of<ChildrenProvider>(context);
+    final children = childrenProvider.children;
+    
     if (children.isEmpty) {
       return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(
-                _searchQuery.isNotEmpty
-                    ? Icons.search_off
-                    : Icons.people_outline,
-                size: 60,
-                color: AppColors.textLight,
-              ),
-              const SizedBox(height: 16),
-              Text(
-                _searchQuery.isNotEmpty
-                    ? 'No children found matching "$_searchQuery"'
-                    : 'No children in this group',
-                style: const TextStyle(
-                  fontSize: 16,
-                  color: AppColors.textSecondary,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              if (_searchQuery.isNotEmpty)
-                TextButton.icon(
-                  onPressed: () {
-                    _searchController.clear();
-                  },
-                  icon: const Icon(Icons.clear),
-                  label: const Text('Clear search'),
-                  style: TextButton.styleFrom(
-                    foregroundColor: AppColors.primary,
-                  ),
-                ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: children.length,
-      itemBuilder: (ctx, i) => ChildItem(
-        child: children[i],
-        onEdit: () => _showEditChildDialog(children[i]),
-        onDelete: () => _confirmDeleteChild(children[i]),
-      ),
-    );
-  }
-
-  void _showAddChildDialog() {
-    showDialog(
-      context: context,
-      builder: (ctx) => const ChildForm(
-        title: 'Add Child',
-        confirmLabel: 'Add',
-      ),
-    );
-  }
-
-  void _showEditChildDialog(Child child) {
-    showDialog(
-      context: context,
-      builder: (ctx) => ChildForm(
-        title: 'Edit Child',
-        confirmLabel: 'Save',
-        child: child,
-      ),
-    );
-  }
-
-  void _confirmDeleteChild(Child child) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
-        title: const Text('Delete Child'),
-        content: Text(
-            'Are you sure you want to delete ${child.name}?\n\nThis will also remove all attendance and points records for this child.'),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.of(ctx).pop();
-            },
-            child: const Text(
-              'Cancel',
-              style: TextStyle(color: AppColors.textSecondary),
-            ),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              Navigator.of(ctx).pop();
-              await Provider.of<ChildrenProvider>(context, listen: false)
-                  .deleteChild(child.id!);
-
-              // ignore: use_build_context_synchronously
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('${child.name} has been deleted'),
-                  backgroundColor: AppColors.error,
-                  behavior: SnackBarBehavior.floating,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  margin: const EdgeInsets.all(16),
-                ),
-              );
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.error,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _EmptyChildrenState extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24.0),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(
+            Icon(
               Icons.people_outline,
-              size: 80,
-              color: AppColors.textLight,
+              size: 64,
+              color: Colors.grey.shade400,
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 16),
             const Text(
-              'No Children Yet',
-              style: AppTextStyles.heading2,
-            ),
-            const SizedBox(height: 12),
-            const Text(
-              'Start by adding children to the app',
+              'No children added yet',
               style: TextStyle(
                 fontSize: 16,
-                color: AppColors.textSecondary,
+                color: Colors.grey,
               ),
             ),
-            const SizedBox(height: 32),
+            const SizedBox(height: 8),
             ElevatedButton.icon(
-              onPressed: () {
-                showDialog(
-                  context: context,
-                  builder: (ctx) => const ChildForm(
-                    title: 'Add Child',
-                    confirmLabel: 'Add',
-                  ),
-                );
-              },
+              onPressed: () => _showAddChildDialog(context),
               icon: const Icon(Icons.add),
-              label: const Text('Add First Child'),
+              label: const Text('Add Child'),
               style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.accent,
+                backgroundColor: AppColors.primary,
                 foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 24,
-                  vertical: 12,
-                ),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
               ),
             ),
           ],
         ),
-      ),
+      );
+    }
+    
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      itemCount: children.length,
+      itemBuilder: (ctx, index) {
+        final child = children[index];
+        return _buildChildItem(context, child);
+      },
     );
   }
-}
-
-class ChildItem extends StatelessWidget {
-  final Child child;
-  final VoidCallback onEdit;
-  final VoidCallback onDelete;
-
-  const ChildItem({
-    super.key,
-    required this.child,
-    required this.onEdit,
-    required this.onDelete,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
+  
+  Widget _buildChildItem(BuildContext context, Child child) {
+    return Dismissible(
+      key: Key('child-${child.id}'),
+      direction: DismissDirection.endToStart,
+      background: Container(
+        color: Colors.red,
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.only(right: 20),
+        child: const Icon(
+          Icons.delete,
+          color: Colors.white,
+        ),
       ),
-      child: InkWell(
-        onTap: onEdit,
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Row(
-            children: [
-              // Avatar
-              CircleAvatar(
-                radius: 24,
-                backgroundColor: AppColors.primary,
-                child: Text(
-                  child.name.isNotEmpty ? child.name[0].toUpperCase() : 'C',
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
-                  ),
-                ),
+      confirmDismiss: (direction) async {
+        return await showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Confirm Deletion'),
+            content: Text('Are you sure you want to delete ${child.name}?\n\nThis will also delete all attendance records and points for this child.'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: const Text('Cancel'),
               ),
-              const SizedBox(width: 16),
-              // Child info
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      child.name,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 4,
-                          ),
-                          decoration: BoxDecoration(
-                            color: AppColors.primaryLight.withOpacity(0.2),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Text(
-                            child.groupName,
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: AppColors.primary,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          'Age: ${child.age}',
-                          style: const TextStyle(
-                            fontSize: 14,
-                            color: AppColors.textSecondary,
-                          ),
-                        ),
-                      ],
-                    ),
-                    if (child.notes != null && child.notes!.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 8),
-                        child: Text(
-                          child.notes!,
-                          style: const TextStyle(
-                            fontSize: 12,
-                            fontStyle: FontStyle.italic,
-                            color: AppColors.textSecondary,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                  ],
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: const Text(
+                  'Delete',
+                  style: TextStyle(color: Colors.red),
                 ),
-              ),
-              // Actions
-              Column(
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.edit),
-                    onPressed: onEdit,
-                    color: AppColors.primary,
-                    iconSize: 20,
-                    padding: const EdgeInsets.all(8),
-                    constraints: const BoxConstraints(),
-                    tooltip: 'Edit',
-                  ),
-                  const SizedBox(height: 4),
-                  IconButton(
-                    icon: const Icon(Icons.delete),
-                    onPressed: onDelete,
-                    color: AppColors.error,
-                    iconSize: 20,
-                    padding: const EdgeInsets.all(8),
-                    constraints: const BoxConstraints(),
-                    tooltip: 'Delete',
-                  ),
-                ],
               ),
             ],
           ),
+        );
+      },
+      onDismissed: (direction) {
+        Provider.of<ChildrenProvider>(context, listen: false).deleteChild(child.id!);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${child.name} deleted'),
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      },
+      child: Card(
+        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        elevation: 1,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
         ),
-      ),
-    );
-  }
-}
-
-class ChildForm extends StatefulWidget {
-  final String title;
-  final String confirmLabel;
-  final Child? child;
-
-  const ChildForm({
-    super.key,
-    required this.title,
-    required this.confirmLabel,
-    this.child,
-  });
-
-  @override
-  State<ChildForm> createState() => _ChildFormState();
-}
-
-class _ChildFormState extends State<ChildForm> {
-  final _formKey = GlobalKey<FormState>();
-  final _nameController = TextEditingController();
-  final _ageController = TextEditingController();
-  final _notesController = TextEditingController();
-  String? _selectedGroup;
-  final _newGroupController = TextEditingController();
-  bool _isAddingNewGroup = false;
-
-  @override
-  void initState() {
-    super.initState();
-
-    if (widget.child != null) {
-      _nameController.text = widget.child!.name;
-      _ageController.text = widget.child!.age.toString();
-      if (widget.child!.notes != null) {
-        _notesController.text = widget.child!.notes!;
-      }
-      _selectedGroup = widget.child!.groupName;
-    }
-  }
-
-  @override
-  void dispose() {
-    _nameController.dispose();
-    _ageController.dispose();
-    _notesController.dispose();
-    _newGroupController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final childrenProvider = Provider.of<ChildrenProvider>(context);
-    final groups = childrenProvider.groups;
-
-    return AlertDialog(
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-      ),
-      title: Text(
-        widget.title,
-        style: AppTextStyles.heading3,
-      ),
-      content: SizedBox(
-        width: double.maxFinite,
-        child: SingleChildScrollView(
-          child: Form(
-            key: _formKey,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
+        child: InkWell(
+          onTap: () => _showChildDetails(context, child),
+          borderRadius: BorderRadius.circular(12),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
               children: [
-                // Name field
-                TextFormField(
-                  controller: _nameController,
-                  decoration: const InputDecoration(
-                    labelText: 'Name',
-                    labelStyle: TextStyle(color: AppColors.textSecondary),
-                    focusedBorder: UnderlineInputBorder(
-                      borderSide: BorderSide(color: AppColors.primary),
+                // Child avatar
+                CircleAvatar(
+                  backgroundColor: AppColors.primaryLight.withOpacity(0.2),
+                  child: Text(
+                    child.name.isNotEmpty ? child.name[0].toUpperCase() : '?',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.primary,
                     ),
                   ),
-                  validator: (value) {
-                    if (value == null || value.isEmpty) {
-                      return 'Please enter a name';
-                    }
-                    return null;
-                  },
                 ),
-                const SizedBox(height: 16),
-
-                // Age field
-                TextFormField(
-                  controller: _ageController,
-                  decoration: const InputDecoration(
-                    labelText: 'Age',
-                    labelStyle: TextStyle(color: AppColors.textSecondary),
-                    focusedBorder: UnderlineInputBorder(
-                      borderSide: BorderSide(color: AppColors.primary),
-                    ),
-                  ),
-                  keyboardType: TextInputType.number,
-                  validator: (value) {
-                    if (value == null || value.isEmpty) {
-                      return 'Please enter an age';
-                    }
-                    final age = int.tryParse(value);
-                    if (age == null || age <= 0) {
-                      return 'Please enter a valid age';
-                    }
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 16),
-
-                // Group field
-                if (!_isAddingNewGroup) ...[
-                  DropdownButtonFormField<String>(
-                    value: _selectedGroup,
-                    decoration: const InputDecoration(
-                      labelText: 'Group',
-                      labelStyle: TextStyle(color: AppColors.textSecondary),
-                      focusedBorder: UnderlineInputBorder(
-                        borderSide: BorderSide(color: AppColors.primary),
+                const SizedBox(width: 16),
+                // Child details
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        child.name,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
                       ),
-                    ),
-                    validator: (value) {
-                      if (value == null || value.isEmpty) {
-                        return 'Please select a group';
-                      }
-                      return null;
-                    },
-                    items: [
-                      ...groups.map(
-                        (group) => DropdownMenuItem(
-                          value: group,
-                          child: Text(group),
+                      Text(
+                        '${child.groupName} • Age: ${child.age}',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Colors.grey.shade600,
                         ),
                       ),
                     ],
-                    onChanged: (value) {
-                      setState(() {
-                        _selectedGroup = value;
-                      });
-                    },
                   ),
-
-                  // Add new group option
-                  if (groups.isEmpty || groups.isNotEmpty)
-                    TextButton.icon(
-                      onPressed: () {
-                        setState(() {
-                          _isAddingNewGroup = true;
-                        });
-                      },
-                      icon: const Icon(Icons.add, size: 16),
-                      label: const Text('Add New Group'),
-                      style: TextButton.styleFrom(
-                        foregroundColor: AppColors.primary,
-                        padding: EdgeInsets.zero,
-                        visualDensity: VisualDensity.compact,
-                        alignment: Alignment.centerLeft,
-                      ),
-                    ),
-                ] else ...[
-                  // New group input field
-                  TextFormField(
-                    controller: _newGroupController,
-                    decoration: InputDecoration(
-                      labelText: 'New Group Name',
-                      labelStyle: const TextStyle(color: AppColors.textSecondary),
-                      focusedBorder: const UnderlineInputBorder(
-                        borderSide: BorderSide(color: AppColors.primary),
-                      ),
-                      suffixIcon: IconButton(
-                        icon: const Icon(Icons.cancel, size: 18),
-                        onPressed: () {
-                          setState(() {
-                            _isAddingNewGroup = false;
-                            _newGroupController.clear();
-                          });
-                        },
-                      ),
-                    ),
-                    validator: _isAddingNewGroup
-                        ? (value) {
-                            if (value == null || value.isEmpty) {
-                              return 'Please enter a group name';
-                            }
-                            if (groups.contains(value)) {
-                              return 'This group already exists';
-                            }
-                            return null;
-                          }
-                        : null,
-                    onChanged: (value) {
-                      _selectedGroup = value;
-                    },
-                  ),
-                ],
-                const SizedBox(height: 16),
-
-                // Notes field
-                TextFormField(
-                  controller: _notesController,
-                  decoration: const InputDecoration(
-                    labelText: 'Notes (Optional)',
-                    labelStyle: TextStyle(color: AppColors.textSecondary),
-                    focusedBorder: UnderlineInputBorder(
-                      borderSide: BorderSide(color: AppColors.primary),
-                    ),
-                  ),
-                  maxLines: 3,
+                ),
+                // Edit button
+                IconButton(
+                  icon: const Icon(Icons.edit_outlined),
+                  color: Colors.grey.shade600,
+                  onPressed: () => _editChild(context, child),
                 ),
               ],
             ),
           ),
         ),
       ),
-      actions: [
-        TextButton(
-          onPressed: () {
-            Navigator.of(context).pop();
-          },
-          child: const Text(
-            'Cancel',
-            style: TextStyle(color: AppColors.textSecondary),
+    );
+  }
+  
+  void _showChildDetails(BuildContext context, Child child) {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => Container(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                CircleAvatar(
+                  backgroundColor: AppColors.primaryLight.withOpacity(0.2),
+                  radius: 24,
+                  child: Text(
+                    child.name.isNotEmpty ? child.name[0].toUpperCase() : '?',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.primary,
+                      fontSize: 20,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        child.name,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 20,
+                        ),
+                      ),
+                      Text(
+                        child.groupName,
+                        style: TextStyle(
+                          fontSize: 16,
+                          color: Colors.grey.shade600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 24),
+            _buildDetailRow('Age', child.age.toString()),
+            if (child.notes != null && child.notes!.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              const Text(
+                'Notes',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                child.notes!,
+                style: const TextStyle(fontSize: 16),
+              ),
+            ],
+            const SizedBox(height: 24),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    _editChild(context, child);
+                  },
+                  icon: const Icon(Icons.edit),
+                  label: const Text('Edit'),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  ),
+                ),
+                ElevatedButton.icon(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    _confirmDeleteChild(context, child);
+                  },
+                  icon: const Icon(Icons.delete),
+                  label: const Text('Delete'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.red,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+  
+  Widget _buildDetailRow(String label, String value) {
+    return Row(
+      children: [
+        Text(
+          '$label:',
+          style: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
           ),
         ),
-        ElevatedButton(
-          onPressed: () {
-            if (_formKey.currentState!.validate()) {
-              _saveChild(context);
-            }
-          },
-          style: ElevatedButton.styleFrom(
-            backgroundColor: AppColors.primary,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(8),
-            ),
-          ),
-          child: Text(widget.confirmLabel),
+        const SizedBox(width: 16),
+        Text(
+          value,
+          style: const TextStyle(fontSize: 16),
         ),
       ],
     );
   }
-
-  void _saveChild(BuildContext context) async {
-    final childrenProvider =
-        Provider.of<ChildrenProvider>(context, listen: false);
-
-    // Determine the final group name
-    final groupName =
-        _isAddingNewGroup ? _newGroupController.text.trim() : _selectedGroup!;
-
-    final child = Child(
-      id: widget.child?.id,
-      name: _nameController.text.trim(),
-      age: int.parse(_ageController.text.trim()),
-      notes: _notesController.text.trim(),
-      groupName: groupName,
-    );
-
-    try {
-      if (widget.child == null) {
-        // Add new child
-        await childrenProvider.addChild(child);
-        // ignore: use_build_context_synchronously
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('${child.name} added successfully'),
-            backgroundColor: AppColors.success,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
+  
+  Widget _buildGroupsTab() {
+    final childrenProvider = Provider.of<ChildrenProvider>(context);
+    final groups = childrenProvider.groups;
+    
+    if (groups.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.category_outlined,
+              size: 64,
+              color: Colors.grey.shade400,
             ),
-            margin: const EdgeInsets.all(16),
-          ),
-        );
-      } else {
-        // Update existing child
-        await childrenProvider.updateChild(child);
-        // ignore: use_build_context_synchronously
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('${child.name} updated successfully'),
-            backgroundColor: AppColors.success,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
+            const SizedBox(height: 16),
+            const Text(
+              'No groups added yet',
+              style: TextStyle(
+                fontSize: 16,
+                color: Colors.grey,
+              ),
             ),
-            margin: const EdgeInsets.all(16),
-          ),
-        );
-      }
-
-      if (context.mounted) Navigator.of(context).pop();
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error: $e'),
-          backgroundColor: AppColors.error,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(10),
-          ),
-          margin: const EdgeInsets.all(16),
+            const SizedBox(height: 8),
+            ElevatedButton.icon(
+              onPressed: () => _showAddGroupDialog(context),
+              icon: const Icon(Icons.add),
+              label: const Text('Add Group'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+              ),
+            ),
+          ],
         ),
       );
     }
+    
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      itemCount: groups.length,
+      itemBuilder: (ctx, index) {
+        final group = groups[index];
+        final childrenInGroup = childrenProvider.getChildrenByGroup(group);
+        
+        return Card(
+          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          elevation: 1,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                // Group icon
+                Container(
+                  height: 40,
+                  width: 40,
+                  decoration: BoxDecoration(
+                    color: AppColors.accent.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(
+                    Icons.group,
+                    color: AppColors.accent,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                // Group details
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        group,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
+                      ),
+                      Text(
+                        '${childrenInGroup.length} children',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Colors.grey.shade600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                // Edit button
+                IconButton(
+                  icon: const Icon(Icons.edit_outlined),
+                  color: Colors.grey.shade600,
+                  onPressed: () => _editGroup(context, group),
+                ),
+                // Delete button
+                IconButton(
+                  icon: const Icon(Icons.delete_outline),
+                  color: Colors.grey.shade600,
+                  onPressed: () => _confirmDeleteGroup(context, group, childrenInGroup.length),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+  
+  void _showAddChildDialog(BuildContext context) {
+    final nameController = TextEditingController();
+    final ageController = TextEditingController();
+    final notesController = TextEditingController();
+    String? selectedGroup;
+    
+    final childrenProvider = Provider.of<ChildrenProvider>(context, listen: false);
+    final groups = childrenProvider.groups;
+    
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          title: const Text('Add New Child'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: nameController,
+                  decoration: const InputDecoration(
+                    labelText: 'Name',
+                    border: OutlineInputBorder(),
+                  ),
+                  textCapitalization: TextCapitalization.words,
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: ageController,
+                  decoration: const InputDecoration(
+                    labelText: 'Age',
+                    border: OutlineInputBorder(),
+                  ),
+                  keyboardType: TextInputType.number,
+                ),
+                const SizedBox(height: 16),
+                if (groups.isEmpty) ...[
+                  TextField(
+                    controller: TextEditingController(text: selectedGroup),
+                    decoration: const InputDecoration(
+                      labelText: 'Group',
+                      border: OutlineInputBorder(),
+                      helperText: 'Enter a new group name',
+                    ),
+                    textCapitalization: TextCapitalization.words,
+                    onChanged: (value) {
+                      setState(() {
+                        selectedGroup = value;
+                      });
+                    },
+                  ),
+                ] else ...[
+                  DropdownButtonFormField<String>(
+                    decoration: const InputDecoration(
+                      labelText: 'Group',
+                      border: OutlineInputBorder(),
+                    ),
+                    value: selectedGroup,
+                    hint: const Text('Select a group'),
+                    items: [
+                      ...groups.map((group) => DropdownMenuItem<String>(
+                        value: group,
+                        child: Text(group),
+                      )),
+                      const DropdownMenuItem<String>(
+                        value: 'new_group',
+                        child: Text('+ Add New Group'),
+                      ),
+                    ],
+                    onChanged: (value) {
+                      setState(() {
+                        selectedGroup = value;
+                        if (value == 'new_group') {
+                          showDialog(
+                            context: context,
+                            builder: (innerCtx) => AlertDialog(
+                              title: const Text('Add New Group'),
+                              content: TextField(
+                                autofocus: true,
+                                textCapitalization: TextCapitalization.words,
+                                decoration: const InputDecoration(
+                                  labelText: 'Group Name',
+                                  border: OutlineInputBorder(),
+                                ),
+                                onChanged: (value) {
+                                  setState(() {
+                                    selectedGroup = value;
+                                  });
+                                },
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () {
+                                    Navigator.of(innerCtx).pop();
+                                    setState(() {
+                                      selectedGroup = null;
+                                    });
+                                  },
+                                  child: const Text('Cancel'),
+                                ),
+                                ElevatedButton(
+                                  onPressed: () {
+                                    Navigator.of(innerCtx).pop();
+                                  },
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: AppColors.primary,
+                                    foregroundColor: Colors.white,
+                                  ),
+                                  child: const Text('Add'),
+                                ),
+                              ],
+                            ),
+                          );
+                        }
+                      });
+                    },
+                  ),
+                ],
+                const SizedBox(height: 16),
+                TextField(
+                  controller: notesController,
+                  decoration: const InputDecoration(
+                    labelText: 'Notes (Optional)',
+                    border: OutlineInputBorder(),
+                  ),
+                  maxLines: 3,
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                final name = nameController.text.trim();
+                final age = int.tryParse(ageController.text.trim()) ?? 0;
+                final notes = notesController.text.trim();
+                final group = selectedGroup?.trim() ?? 'Default Group';
+                
+                if (name.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Please enter a name'),
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                  return;
+                }
+                
+                if (age <= 0 || age > 100) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Please enter a valid age'),
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                  return;
+                }
+                
+                Navigator.of(ctx).pop();
+                
+                childrenProvider.addChild(
+                  name,
+                  age,
+                  group,
+                  notes.isEmpty ? null : notes,
+                ).then((_) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('$name added successfully'),
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                });
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Add'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+  
+  void _editChild(BuildContext context, Child child) {
+    final nameController = TextEditingController(text: child.name);
+    final ageController = TextEditingController(text: child.age.toString());
+    final notesController = TextEditingController(text: child.notes ?? '');
+    String selectedGroup = child.groupName;
+    
+    final childrenProvider = Provider.of<ChildrenProvider>(context, listen: false);
+    final groups = childrenProvider.groups;
+    
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          title: const Text('Edit Child'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: nameController,
+                  decoration: const InputDecoration(
+                    labelText: 'Name',
+                    border: OutlineInputBorder(),
+                  ),
+                  textCapitalization: TextCapitalization.words,
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: ageController,
+                  decoration: const InputDecoration(
+                    labelText: 'Age',
+                    border: OutlineInputBorder(),
+                  ),
+                  keyboardType: TextInputType.number,
+                ),
+                const SizedBox(height: 16),
+                DropdownButtonFormField<String>(
+                  decoration: const InputDecoration(
+                    labelText: 'Group',
+                    border: OutlineInputBorder(),
+                  ),
+                  value: groups.contains(selectedGroup) ? selectedGroup : null,
+                  hint: const Text('Select a group'),
+                  items: [
+                    ...groups.map((group) => DropdownMenuItem<String>(
+                      value: group,
+                      child: Text(group),
+                    )),
+                    const DropdownMenuItem<String>(
+                      value: 'new_group',
+                      child: Text('+ Add New Group'),
+                    ),
+                  ],
+                  onChanged: (value) {
+                    setState(() {
+                      if (value == 'new_group') {
+                        showDialog(
+                          context: context,
+                          builder: (innerCtx) => AlertDialog(
+                            title: const Text('Add New Group'),
+                            content: TextField(
+                              autofocus: true,
+                              textCapitalization: TextCapitalization.words,
+                              decoration: const InputDecoration(
+                                labelText: 'Group Name',
+                                border: OutlineInputBorder(),
+                              ),
+                              onChanged: (newGroup) {
+                                setState(() {
+                                  selectedGroup = newGroup;
+                                });
+                              },
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () {
+                                  Navigator.of(innerCtx).pop();
+                                  setState(() {
+                                    selectedGroup = child.groupName; // Reset to original
+                                  });
+                                },
+                                child: const Text('Cancel'),
+                              ),
+                              ElevatedButton(
+                                onPressed: () {
+                                  Navigator.of(innerCtx).pop();
+                                },
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: AppColors.primary,
+                                  foregroundColor: Colors.white,
+                                ),
+                                child: const Text('Add'),
+                              ),
+                            ],
+                          ),
+                        );
+                      } else if (value != null) {
+                        selectedGroup = value;
+                      }
+                    });
+                  },
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: notesController,
+                  decoration: const InputDecoration(
+                    labelText: 'Notes (Optional)',
+                    border: OutlineInputBorder(),
+                  ),
+                  maxLines: 3,
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                final name = nameController.text.trim();
+                final age = int.tryParse(ageController.text.trim()) ?? 0;
+                final notes = notesController.text.trim();
+                
+                if (name.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Please enter a name'),
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                  return;
+                }
+                
+                if (age <= 0 || age > 100) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Please enter a valid age'),
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                  return;
+                }
+                
+                Navigator.of(ctx).pop();
+                
+                childrenProvider.updateChild(
+                  child.id!,
+                  name,
+                  age,
+                  selectedGroup,
+                  notes.isEmpty ? null : notes,
+                ).then((_) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('$name updated successfully'),
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                });
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+  
+  void _confirmDeleteChild(BuildContext context, Child child) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Confirm Deletion'),
+                content: Text(
+            'Are you sure you want to delete ${child.name}?\n\nThis will also delete all attendance records and points for this child.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              Provider.of<ChildrenProvider>(context, listen: false)
+                  .deleteChild(child.id!)
+                  .then((_) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('${child.name} deleted'),
+                    behavior: SnackBarBehavior.floating,
+                    duration: const Duration(seconds: 2),
+                  ),
+                );
+              });
+            },
+            child: const Text(
+              'Delete',
+              style: TextStyle(color: Colors.red),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showAddGroupDialog(BuildContext context) {
+    final groupController = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Add New Group'),
+        content: TextField(
+          controller: groupController,
+          decoration: const InputDecoration(
+            labelText: 'Group Name',
+            border: OutlineInputBorder(),
+          ),
+          textCapitalization: TextCapitalization.words,
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final groupName = groupController.text.trim();
+
+              if (groupName.isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Please enter a group name'),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+                return;
+              }
+
+              Navigator.of(ctx).pop();
+
+              Provider.of<ChildrenProvider>(context, listen: false)
+                  .addGroup(groupName)
+                  .then((_) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('$groupName added successfully'),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              });
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _editGroup(BuildContext context, String groupName) {
+    final groupController = TextEditingController(text: groupName);
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Edit Group'),
+        content: TextField(
+          controller: groupController,
+          decoration: const InputDecoration(
+            labelText: 'Group Name',
+            border: OutlineInputBorder(),
+          ),
+          textCapitalization: TextCapitalization.words,
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final newName = groupController.text.trim();
+
+              if (newName.isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Please enter a group name'),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+                return;
+              }
+
+              if (newName == groupName) {
+                Navigator.of(ctx).pop();
+                return;
+              }
+
+              Navigator.of(ctx).pop();
+
+              Provider.of<ChildrenProvider>(context, listen: false)
+                  .updateGroup(groupName, newName)
+                  .then((_) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Group renamed to $newName'),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              });
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _confirmDeleteGroup(
+      BuildContext context, String groupName, int childCount) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Confirm Deletion'),
+        content: childCount > 0
+            ? Text(
+                'This group contains $childCount children. You cannot delete a group that has children in it. Please move or delete the children first.')
+            : Text('Are you sure you want to delete the group "$groupName"?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          if (childCount == 0)
+            TextButton(
+              onPressed: () {
+                Navigator.of(ctx).pop();
+                Provider.of<ChildrenProvider>(context, listen: false)
+                    .deleteGroup(groupName)
+                    .then((success) {
+                  if (success) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Group "$groupName" deleted'),
+                        behavior: SnackBarBehavior.floating,
+                        duration: const Duration(seconds: 2),
+                      ),
+                    );
+                  } else {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Failed to delete group'),
+                        behavior: SnackBarBehavior.floating,
+                        duration: Duration(seconds: 2),
+                      ),
+                    );
+                  }
+                });
+              },
+              child: const Text(
+                'Delete',
+                style: TextStyle(color: Colors.red),
+              ),
+            ),
+        ],
+      ),
+    );
   }
 }

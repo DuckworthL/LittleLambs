@@ -1,44 +1,41 @@
-import 'dart:io';
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
-import 'package:path_provider/path_provider.dart';
 
 class DatabaseHelper {
-  static const _databaseName = "church_attendance.db";
-  static const _databaseVersion = 2; // Incremented version number
-
-  // Singleton pattern
-  DatabaseHelper._privateConstructor();
-  static final DatabaseHelper instance = DatabaseHelper._privateConstructor();
-
+  static final DatabaseHelper instance = DatabaseHelper._init();
   static Database? _database;
+
+  DatabaseHelper._init();
 
   Future<Database> get database async {
     if (_database != null) return _database!;
-    _database = await _initDatabase();
+    _database = await _initDB('little_lambs.db');
     return _database!;
   }
 
-  _initDatabase() async {
-    Directory documentsDirectory = await getApplicationDocumentsDirectory();
-    String path = join(documentsDirectory.path, _databaseName);
+  Future<Database> _initDB(String filePath) async {
+    final dbPath = await getDatabasesPath();
+    final path = join(dbPath, filePath);
+
     return await openDatabase(
       path,
-      version: _databaseVersion,
+      version: 2,
       onCreate: _onCreate,
-      onUpgrade: _onUpgrade, // Added upgrade handler
+      onUpgrade: _onUpgrade,
     );
   }
 
-  Future _onCreate(Database db, int version) async {
+  Future<void> _onCreate(Database db, int version) async {
+    // Create tables
     await db.execute('''
       CREATE TABLE children(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
         age INTEGER NOT NULL,
-        notes TEXT,
-        groupName TEXT NOT NULL
+        groupName TEXT NOT NULL,
+        notes TEXT
       )
     ''');
 
@@ -48,9 +45,8 @@ class DatabaseHelper {
         childId INTEGER NOT NULL,
         date TEXT NOT NULL,
         isPresent INTEGER NOT NULL,
-        FOREIGN KEY (childId) REFERENCES children (id)
-          ON DELETE CASCADE,
-        UNIQUE(childId, date)
+        UNIQUE(childId, date),
+        FOREIGN KEY (childId) REFERENCES children (id) ON DELETE CASCADE
       )
     ''');
 
@@ -61,159 +57,218 @@ class DatabaseHelper {
         date TEXT NOT NULL,
         amount INTEGER NOT NULL,
         reason TEXT,
-        FOREIGN KEY (childId) REFERENCES children (id)
-          ON DELETE CASCADE
+        FOREIGN KEY (childId) REFERENCES children (id) ON DELETE CASCADE
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE archived_months (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        year INTEGER NOT NULL,
+        month INTEGER NOT NULL,
+        archived_date TEXT NOT NULL
       )
     ''');
   }
 
-  // Added upgrade handler
-  Future _onUpgrade(Database db, int oldVersion, int newVersion) async {
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
     if (oldVersion < 2) {
-      // Create points table if upgrading from version 1
+      // Add the archived_months table if upgrading from version 1
       await db.execute('''
-        CREATE TABLE IF NOT EXISTS points(
+        CREATE TABLE IF NOT EXISTS archived_months (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
-          childId INTEGER NOT NULL,
-          date TEXT NOT NULL,
-          amount INTEGER NOT NULL,
-          reason TEXT,
-          FOREIGN KEY (childId) REFERENCES children (id)
-            ON DELETE CASCADE
+          year INTEGER NOT NULL,
+          month INTEGER NOT NULL,
+          archived_date TEXT NOT NULL
         )
       ''');
     }
   }
 
-  // Children CRUD operations
-  Future<int> insertChild(Map<String, dynamic> row) async {
-    Database db = await instance.database;
-    return await db.insert('children', row);
+  // CHILDREN CRUD OPERATIONS
+  Future<int> insertChild(Map<String, dynamic> childData) async {
+    final db = await database;
+    return await db.insert('children', childData);
   }
 
   Future<List<Map<String, dynamic>>> queryAllChildren() async {
-    Database db = await instance.database;
+    final db = await database;
     return await db.query('children', orderBy: 'name');
   }
 
-  Future<List<Map<String, dynamic>>> queryChildrenByGroup(
-      String groupName) async {
-    Database db = await instance.database;
-    return await db.query('children',
-        where: 'groupName = ?', whereArgs: [groupName], orderBy: 'name');
-  }
-
-  Future<int> updateChild(Map<String, dynamic> row) async {
-    Database db = await instance.database;
-    int id = row['id'];
-    return await db.update('children', row, where: 'id = ?', whereArgs: [id]);
+  Future<int> updateChild(int id, Map<String, dynamic> childData) async {
+    final db = await database;
+    return await db.update(
+      'children',
+      childData,
+      where: 'id = ?',
+      whereArgs: [id],
+    );
   }
 
   Future<int> deleteChild(int id) async {
-    Database db = await instance.database;
-    return await db.delete('children', where: 'id = ?', whereArgs: [id]);
+    final db = await database;
+
+    // Delete associated attendance records first
+    await db.delete(
+      'attendance',
+      where: 'childId = ?',
+      whereArgs: [id],
+    );
+
+    // Delete associated points records
+    await db.delete(
+      'points',
+      where: 'childId = ?',
+      whereArgs: [id],
+    );
+
+    // Delete the child
+    return await db.delete(
+      'children',
+      where: 'id = ?',
+      whereArgs: [id],
+    );
   }
 
-  // Attendance CRUD operations
-  Future<int> insertOrUpdateAttendance(Map<String, dynamic> row) async {
-    Database db = await instance.database;
+  // ATTENDANCE OPERATIONS
+  Future<int> insertOrUpdateAttendance(Map<String, dynamic> data) async {
+    final db = await database;
+
     try {
-      return await db.insert('attendance', row,
-          conflictAlgorithm: ConflictAlgorithm.replace);
+      // Try to insert first
+      return await db.insert(
+        'attendance',
+        data,
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
     } catch (e) {
-      return await db.update('attendance', row,
-          where: 'childId = ? AND date = ?',
-          whereArgs: [row['childId'], row['date']]);
+      if (kDebugMode) {
+        print('Error during attendance insert: $e');
+      }
+
+      // If error, try to update
+      return await db.update(
+        'attendance',
+        data,
+        where: 'childId = ? AND date = ?',
+        whereArgs: [data['childId'], data['date']],
+      );
     }
   }
 
   Future<List<Map<String, dynamic>>> queryAttendanceForDate(String date) async {
-    Database db = await instance.database;
-    return await db.query('attendance', where: 'date = ?', whereArgs: [date]);
-  }
-
-  Future<List<Map<String, dynamic>>> queryAttendanceByChild(int childId) async {
-    Database db = await instance.database;
-    return await db.query('attendance',
-        where: 'childId = ?', whereArgs: [childId], orderBy: 'date DESC');
+    final db = await database;
+    return await db.query(
+      'attendance',
+      where: 'date = ?',
+      whereArgs: [date],
+    );
   }
 
   Future<List<Map<String, dynamic>>> queryAttendanceByMonth(
       String yearMonth) async {
-    Database db = await instance.database;
-    return await db.query('attendance',
-        where: 'date LIKE ?', whereArgs: ['$yearMonth%'], orderBy: 'date');
+    final db = await database;
+    return await db.query(
+      'attendance',
+      where: 'date LIKE ?',
+      whereArgs: ['$yearMonth%'],
+    );
   }
 
-  Future<Map<String, dynamic>> getAttendanceStats() async {
-    Database db = await instance.database;
-
-    var totalResult = await db.rawQuery(
-        'SELECT COUNT(DISTINCT date) as totalServices FROM attendance');
-    int totalServices = totalResult.first['totalServices'] as int;
-
-    var childrenResult =
-        await db.rawQuery('SELECT COUNT(*) as totalChildren FROM children');
-    int totalChildren = childrenResult.first['totalChildren'] as int;
-
-    return {
-      'totalServices': totalServices,
-      'totalChildren': totalChildren,
-    };
+  // POINTS OPERATIONS
+  Future<int> insertPoints(Map<String, dynamic> data) async {
+    final db = await database;
+    return await db.insert('points', data);
   }
 
-  // Points CRUD operations
-  Future<int> addPoints(Map<String, dynamic> row) async {
-    Database db = await instance.database;
-    try {
-      return await db.insert('points', row);
-    } catch (e) {
-      if (kDebugMode) {
-        print('Error adding points: $e');
-      }
-      // Create table if it doesn't exist and try again
-      await db.execute('''
-        CREATE TABLE IF NOT EXISTS points(
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          childId INTEGER NOT NULL,
-          date TEXT NOT NULL,
-          amount INTEGER NOT NULL,
-          reason TEXT,
-          FOREIGN KEY (childId) REFERENCES children (id)
-            ON DELETE CASCADE
-        )
-      ''');
-      return await db.insert('points', row);
-    }
+  Future<List<Map<String, dynamic>>> queryAllPoints() async {
+    final db = await database;
+    return await db.rawQuery('''
+      SELECT points.*, children.name as childName, children.groupName 
+      FROM points 
+      JOIN children ON points.childId = children.id
+      ORDER BY points.date DESC
+    ''');
+  }
+
+  Future<int> updatePoints(int id, Map<String, dynamic> data) async {
+    final db = await database;
+    return await db.update(
+      'points',
+      data,
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  Future<int> deletePoints(int id) async {
+    final db = await database;
+    return await db.delete(
+      'points',
+      where: 'id = ?',
+      whereArgs: [id],
+    );
   }
 
   Future<List<Map<String, dynamic>>> queryPointsByChild(int childId) async {
-    Database db = await instance.database;
-    try {
-      return await db.query('points',
-          where: 'childId = ?', whereArgs: [childId], orderBy: 'date DESC');
-    } catch (e) {
-      if (kDebugMode) {
-        print('Error querying points: $e');
-      }
-      // If table doesn't exist yet, return empty list
-      return [];
-    }
+    final db = await database;
+    return await db.query(
+      'points',
+      where: 'childId = ?',
+      whereArgs: [childId],
+      orderBy: 'date DESC',
+    );
   }
 
   Future<int> getTotalPointsByChild(int childId) async {
-    Database db = await instance.database;
-    try {
-      var result = await db.rawQuery(
-          'SELECT SUM(amount) as total FROM points WHERE childId = ?',
-          [childId]);
-      return result.first['total'] as int? ?? 0;
-    } catch (e) {
-      // Handle case where points table might not exist
-      if (kDebugMode) {
-        print('Error getting points: $e');
-      }
-      return 0;
-    }
+    final db = await database;
+    final result = await db.rawQuery(
+      'SELECT SUM(amount) as total FROM points WHERE childId = ?',
+      [childId],
+    );
+
+    return result.first['total'] == null ? 0 : result.first['total'] as int;
+  }
+
+  // GROUP OPERATIONS
+  Future<List<String>> queryAllGroups() async {
+    final db = await database;
+    final result = await db.rawQuery(
+      'SELECT DISTINCT groupName FROM children ORDER BY groupName',
+    );
+
+    return result.map((row) => row['groupName'] as String).toList();
+  }
+
+  Future<int> updateGroup(String oldName, String newName) async {
+    final db = await database;
+    return await db.update(
+      'children',
+      {'groupName': newName},
+      where: 'groupName = ?',
+      whereArgs: [oldName],
+    );
+  }
+
+  Future<int> deleteGroup(String groupName) async {
+    final db = await database;
+    // This will delete all children in the group, and cascading will delete their attendance and points
+    return await db.delete(
+      'children',
+      where: 'groupName = ?',
+      whereArgs: [groupName],
+    );
+  }
+
+  // Count children in a group
+  Future<int> countChildrenInGroup(String groupName) async {
+    final db = await database;
+    final result = await db.rawQuery(
+      'SELECT COUNT(*) as count FROM children WHERE groupName = ?',
+      [groupName],
+    );
+
+    return result.first['count'] as int;
   }
 }

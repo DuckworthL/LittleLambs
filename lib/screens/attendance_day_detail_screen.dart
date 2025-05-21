@@ -42,50 +42,35 @@ class AttendanceProvider with ChangeNotifier {
   }
 
   Future<void> fetchAttendanceForDate(String date) async {
-    try {
-      final attendanceData =
-          await DatabaseHelper.instance.queryAttendanceForDate(date);
-      Map<int, bool> childAttendance = {};
+    final attendanceData =
+        await DatabaseHelper.instance.queryAttendanceForDate(date);
+    Map<int, bool> childAttendance = {};
 
-      // Process data from database
-      for (var item in attendanceData) {
-        childAttendance[item['childId'] as int] = item['isPresent'] == 1;
-      }
-
-      _attendanceData[date] = childAttendance;
-      notifyListeners();
-    } catch (e) {
-      Logger.error('Error fetching attendance for date: $date', e);
-      // Create empty map if fetch fails to prevent null errors
-      _attendanceData[date] = {};
-      notifyListeners();
-      rethrow;
+    for (var item in attendanceData) {
+      childAttendance[item['childId'] as int] = item['isPresent'] == 1;
     }
+
+    _attendanceData[date] = childAttendance;
+    notifyListeners();
   }
 
   Future<void> markAttendance(int childId, String date, bool isPresent) async {
-    try {
-      final attendance = Attendance(
-        childId: childId,
-        date: date,
-        isPresent: isPresent,
-      );
+    final attendance = Attendance(
+      childId: childId,
+      date: date,
+      isPresent: isPresent,
+    );
 
-      await DatabaseHelper.instance
-          .insertOrUpdateAttendance(attendance.toMap());
+    await DatabaseHelper.instance.insertOrUpdateAttendance(attendance.toMap());
 
-      // Update local state
-      if (_attendanceData.containsKey(date)) {
-        _attendanceData[date]![childId] = isPresent;
-      } else {
-        _attendanceData[date] = {childId: isPresent};
-      }
-
-      notifyListeners();
-    } catch (e) {
-      Logger.error('Error marking attendance for child: $childId on $date', e);
-      rethrow;
+    // Update local state
+    if (_attendanceData.containsKey(date)) {
+      _attendanceData[date]![childId] = isPresent;
+    } else {
+      _attendanceData[date] = {childId: isPresent};
     }
+
+    notifyListeners();
   }
 
   // Add setAttendance method to match what's used in the Detail Screen
@@ -134,7 +119,6 @@ class AttendanceProvider with ChangeNotifier {
 
       Map<String, int> dateCountMap = {};
 
-      // Process data from database
       for (var item in data) {
         final date = item['date'] as String;
         final isPresent = item['isPresent'] as int;
@@ -148,53 +132,11 @@ class AttendanceProvider with ChangeNotifier {
         }
       }
 
-      // For current month, ensure we have entries for all past service days
-      final now = DateTime.now();
-      if (year == now.year && month == now.month) {
-        // Get all service dates in the month up to today
-        final serviceDates = _getServiceDatesInMonth(year, month, now);
-
-        // Ensure each service date has an entry
-        for (var date in serviceDates) {
-          final dateStr = DateFormat('yyyy-MM-dd').format(date);
-          if (!dateCountMap.containsKey(dateStr)) {
-            // If we don't have data for this date yet, initialize to 0
-            dateCountMap[dateStr] = 0;
-          }
-        }
-      }
-
       return dateCountMap;
     } catch (e) {
       Logger.error('Error getting monthly attendance', e);
       return {};
     }
-  }
-
-  // Helper method to get service dates (Saturday & Sunday) up to a certain date
-  List<DateTime> _getServiceDatesInMonth(
-      int year, int month, DateTime endDate) {
-    final List<DateTime> serviceDates = [];
-    final DateTime firstDayOfMonth = DateTime(year, month, 1);
-    final DateTime lastDayToCheck =
-        month == endDate.month && year == endDate.year
-            ? endDate // If same month as today, only check up to today
-            : DateTime(year, month + 1, 0); // Otherwise check the whole month
-
-    // Start from first day of month
-    DateTime currentDay = firstDayOfMonth;
-
-    // Add all Saturdays and Sundays in the month up to lastDayToCheck
-    while (
-        currentDay.isBefore(lastDayToCheck) || currentDay == lastDayToCheck) {
-      if (currentDay.weekday == DateTime.saturday ||
-          currentDay.weekday == DateTime.sunday) {
-        serviceDates.add(currentDay);
-      }
-      currentDay = currentDay.add(const Duration(days: 1));
-    }
-
-    return serviceDates;
   }
 
   Future<Map<int, int>> getAttendanceCountByChild(
@@ -212,7 +154,7 @@ class AttendanceProvider with ChangeNotifier {
           AND isPresent = 1
         ''', [childId, startDate, endDate]);
 
-        result[childId] = Sqflite.firstIntValue(count) ?? 0;
+        result[childId] = count.first['count'] as int;
       }
 
       return result;
@@ -244,7 +186,7 @@ class AttendanceProvider with ChangeNotifier {
       ''');
 
       final List<Map<String, dynamic>> archivedData =
-          await db.query('archived_months', orderBy: 'year DESC, month DESC');
+          await db.query('archived_months');
 
       _archivedMonths.clear();
       for (var item in archivedData) {
@@ -266,20 +208,15 @@ class AttendanceProvider with ChangeNotifier {
   }
 
   // Method to archive a month's reports
-  Future<bool> archiveMonthReport(int year, int month) async {
+  Future<void> archiveMonthReport(int year, int month) async {
     try {
       if (isMonthArchived(year, month)) {
         // Already archived
-        return true;
-      }
-
-      // Don't allow archiving current month or future months
-      final now = DateTime.now();
-      if ((year > now.year) || (year == now.year && month >= now.month)) {
-        throw Exception("Can't archive current or future months");
+        return;
       }
 
       Database db = await DatabaseHelper.instance.database;
+      final now = DateTime.now();
       final archivedDate = DateFormat('yyyy-MM-dd').format(now);
 
       // Insert into archived_months table
@@ -299,7 +236,6 @@ class AttendanceProvider with ChangeNotifier {
 
       Logger.log('Archived report for $month/$year');
       notifyListeners();
-      return true;
     } catch (e) {
       Logger.error('Error archiving month report', e);
       throw Exception('Failed to archive report: $e');
@@ -307,22 +243,18 @@ class AttendanceProvider with ChangeNotifier {
   }
 
   // Method to restore a month's reports from archive
-  Future<bool> restoreMonthReport(int year, int month) async {
+  Future<void> restoreMonthReport(int year, int month) async {
     try {
       if (!isMonthArchived(year, month)) {
         // Not archived
-        return true;
+        return;
       }
 
       Database db = await DatabaseHelper.instance.database;
 
       // Remove from archived_months table
-      final rowsAffected = await db.delete('archived_months',
+      await db.delete('archived_months',
           where: 'year = ? AND month = ?', whereArgs: [year, month]);
-
-      if (rowsAffected == 0) {
-        throw Exception('No archived report found for $month/$year');
-      }
 
       // Update local state
       final monthKey = '$year-${month.toString().padLeft(2, '0')}';
@@ -330,7 +262,6 @@ class AttendanceProvider with ChangeNotifier {
 
       Logger.log('Restored report for $month/$year');
       notifyListeners();
-      return true;
     } catch (e) {
       Logger.error('Error restoring month report', e);
       throw Exception('Failed to restore report: $e');
@@ -338,20 +269,13 @@ class AttendanceProvider with ChangeNotifier {
   }
 
   // Method to delete a month's reports
-  Future<bool> deleteMonthReport(int year, int month) async {
+  Future<void> deleteMonthReport(int year, int month) async {
     try {
       Database db = await DatabaseHelper.instance.database;
       final yearMonth = DateFormat('yyyy-MM').format(DateTime(year, month));
 
-      // Don't allow deleting current month
-      final now = DateTime.now();
-      if (year == now.year && month == now.month) {
-        throw Exception("Can't delete current month's report");
-      }
-
       // Delete attendance records for this month
-      final rowsAffected = await db.delete('attendance',
-          where: "date LIKE ?", whereArgs: ['$yearMonth%']);
+      await db.delete('attendance', where: "date LIKE '$yearMonth%'");
 
       // If it was archived, also remove from archived_months
       if (isMonthArchived(year, month)) {
@@ -367,37 +291,11 @@ class AttendanceProvider with ChangeNotifier {
       final pattern = RegExp('^$yearMonth');
       _attendanceData.removeWhere((key, _) => pattern.hasMatch(key));
 
-      Logger.log(
-          'Deleted report for $month/$year (affected $rowsAffected records)');
+      Logger.log('Deleted report for $month/$year');
       notifyListeners();
-      return true;
     } catch (e) {
       Logger.error('Error deleting month report', e);
       throw Exception('Failed to delete report: $e');
-    }
-  }
-
-  // Create an empty attendance record for a date if none exists
-  // This helps with accessing attendance details for dates in the current month
-  Future<void> initializeAttendanceForDate(
-      String date, List<int> childIds) async {
-    try {
-      // If we already have data for this date, do nothing
-      if (_attendanceData.containsKey(date) &&
-          _attendanceData[date]!.isNotEmpty) {
-        return;
-      }
-
-      // Otherwise, create an empty map for this date
-      Map<int, bool> childAttendance = {};
-      for (var childId in childIds) {
-        childAttendance[childId] = false;
-      }
-
-      _attendanceData[date] = childAttendance;
-      notifyListeners();
-    } catch (e) {
-      Logger.error('Error initializing attendance for date: $date', e);
     }
   }
 }

@@ -1,401 +1,408 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../constants/app_colors.dart';
 import '../providers/children_provider.dart';
 import '../providers/points_provider.dart';
 import '../models/child.dart';
-import '../constants/app_colors.dart';
-import '../constants/app_text_styles.dart';
+import '../utils/logger.dart';
 
 class AddPointsScreen extends StatefulWidget {
-  const AddPointsScreen({super.key});
+  final int? selectedChildId;
+
+  const AddPointsScreen({super.key, this.selectedChildId});
 
   @override
   State<AddPointsScreen> createState() => _AddPointsScreenState();
 }
 
-class _AddPointsScreenState extends State<AddPointsScreen> with TickerProviderStateMixin {
-  TabController? _tabController;
-  bool _isLoading = true;
-  bool _hasError = false;
-  String _errorMessage = '';
-  
+class _AddPointsScreenState extends State<AddPointsScreen> {
+  final TextEditingController _pointsController =
+      TextEditingController(text: '1');
+  final TextEditingController _reasonController = TextEditingController();
+
+  String? _selectedGroup;
+  int? _selectedChildId;
+  bool _isQuickMode = false;
+
+  // Loading state
+  bool _isLoading = false;
+
   @override
   void initState() {
     super.initState();
+    _selectedChildId = widget.selectedChildId;
     _loadData();
   }
-  
+
   @override
   void dispose() {
-    _tabController?.dispose();
+    _pointsController.dispose();
+    _reasonController.dispose();
     super.dispose();
   }
-  
+
   Future<void> _loadData() async {
     setState(() => _isLoading = true);
-    
+
     try {
-      final childrenProvider = Provider.of<ChildrenProvider>(context, listen: false);
-      final pointsProvider = Provider.of<PointsProvider>(context, listen: false);
-      
+      // Load children & points data
+      final childrenProvider =
+          Provider.of<ChildrenProvider>(context, listen: false);
+      final pointsProvider =
+          Provider.of<PointsProvider>(context, listen: false);
+
       await childrenProvider.fetchAndSetChildren();
-      
-      final childIds = childrenProvider.children.map((c) => c.id!).toList();
-      
-      try {
-        await pointsProvider.loadAllChildrenTotalPoints(childIds);
-      } catch (e) {
-        if (kDebugMode) {
-          print('Error loading points: $e');
-        }
-      }
-      
-      _tabController?.dispose();
-      
-      if (childrenProvider.groups.isNotEmpty) {
-        _tabController = TabController(
-          length: childrenProvider.groups.length,
-          vsync: this,
-        );
-      }
-      
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
-    } catch (e) {
+      await pointsProvider.fetchPoints();
+      await pointsProvider.loadAllChildrenTotalPoints();
+
       if (mounted) {
         setState(() {
           _isLoading = false;
-          _hasError = true;
-          _errorMessage = 'Error loading data: $e';
         });
+      }
+    } catch (e) {
+      Logger.error('Error loading data', e);
+
+      if (mounted) {
+        setState(() => _isLoading = false);
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
       }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_isLoading) {
-      return Scaffold(
-        backgroundColor: AppColors.background,
-        appBar: AppBar(
-          title: const Text('Loading...'),
-          backgroundColor: AppColors.accent,
-          foregroundColor: Colors.white,
-          elevation: 0,
-        ),
-        body: const Center(
-          child: CircularProgressIndicator(color: AppColors.accent),
-        ),
-      );
-    }
-    
-    if (_hasError) {
-      return Scaffold(
-        backgroundColor: AppColors.background,
-        appBar: AppBar(
-          title: const Text('Error'),
-          backgroundColor: AppColors.error,
-          foregroundColor: Colors.white,
-          elevation: 0,
-        ),
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24.0),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(Icons.error_outline, size: 60, color: AppColors.error),
-                const SizedBox(height: 16),
-                Text(
-                  _errorMessage,
-                  textAlign: TextAlign.center,
-                  style: AppTextStyles.bodyMedium,
-                ),
-                const SizedBox(height: 24),
-                ElevatedButton.icon(
-                  onPressed: _loadData,
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('Retry'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.accent,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 24,
-                      vertical: 12,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-    }
-    
     final childrenProvider = Provider.of<ChildrenProvider>(context);
-    
+    final pointsProvider = Provider.of<PointsProvider>(context);
+
+    final children = childrenProvider.children;
+    final groups = childrenProvider.groups;
+
+    // Filter children by selected group
+    final filteredChildren = _selectedGroup != null
+        ? children.where((child) => child.groupName == _selectedGroup).toList()
+        : children;
+
+    // Get selected child if any
+    final selectedChild = _selectedChildId != null
+        ? children.firstWhere((child) => child.id == _selectedChildId,
+            orElse: () => Child(id: 0, name: '', age: 0, groupName: ''))
+        : null;
+
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
-        title: const Text('Add Points'),
-        backgroundColor: AppColors.accent,
-        foregroundColor: Colors.white,
+        title: Text(_isQuickMode ? 'Quick Add Points' : 'Add Points'),
+        backgroundColor: AppColors.primary,
         elevation: 0,
-        bottom: childrenProvider.groups.isNotEmpty && _tabController != null
-            ? PreferredSize(
-                preferredSize: const Size.fromHeight(48),
-                child: Container(
-                  height: 40,
-                  margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.15),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: TabBar(
-                    controller: _tabController,
-                    isScrollable: true,
-                    indicatorSize: TabBarIndicatorSize.tab,
-                    indicator: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    labelColor: AppColors.accent,
-                    unselectedLabelColor: Colors.white,
-                    labelStyle: const TextStyle(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 12,
-                    ),
-                    unselectedLabelStyle: const TextStyle(
-                      fontWeight: FontWeight.normal,
-                      fontSize: 12,
-                    ),
-                    tabs: childrenProvider.groups
-                        .map((group) => Tab(text: group))
-                        .toList(),
-                  ),
-                ),
-              )
-            : null,
-      ),
-      body: childrenProvider.groups.isEmpty
-          ? const _EmptyState(message: 'No groups defined yet. Add children first.')
-          : _tabController == null
-              ? const _EmptyState(message: 'Error initializing tabs')
-              : TabBarView(
-                  controller: _tabController,
-                  children: childrenProvider.groups.map((group) {
-                    final children = childrenProvider.getChildrenByGroup(group);
-                    return PointsChildList(
-                      children: children,
-                    );
-                  }).toList(),
-                ),
-    );
-  }
-}
-
-class _EmptyState extends StatelessWidget {
-  final String message;
-  
-  const _EmptyState({required this.message});
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24.0),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(
-              Icons.stars_outlined,
-              size: 60,
-              color: AppColors.textLight,
-            ),
-            const SizedBox(height: 16),
-            Text(
-              message,
-              style: const TextStyle(
-                fontSize: 16,
-                color: AppColors.textSecondary,
-              ),
-              textAlign: TextAlign.center,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class PointsChildList extends StatelessWidget {
-  final List<Child> children;
-  
-  const PointsChildList({
-    super.key,
-    required this.children,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    if (children.isEmpty) {
-      return const _EmptyState(message: 'No children in this group');
-    }
-    
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: children.length,
-      itemBuilder: (context, index) {
-        return PointsChildListItem(
-          child: children[index],
-        );
-      },
-    );
-  }
-}
-
-class PointsChildListItem extends StatelessWidget {
-  final Child child;
-  
-  const PointsChildListItem({
-    super.key,
-    required this.child,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final pointsProvider = Provider.of<PointsProvider>(context);
-    final totalPoints = pointsProvider.getChildTotalPoints(child.id!);
-    
-        return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
+        foregroundColor: Colors.white,
+        actions: [
+          // Toggle quick mode
+          IconButton(
+            icon: Icon(_isQuickMode ? Icons.edit : Icons.bolt),
+            tooltip: _isQuickMode ? 'Regular Mode' : 'Quick Mode',
+            onPressed: () {
+              setState(() {
+                _isQuickMode = !_isQuickMode;
+              });
+            },
           ),
         ],
       ),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : _isQuickMode
+              ? _buildQuickMode(filteredChildren, groups, pointsProvider)
+              : _buildRegularMode(
+                  filteredChildren, groups, selectedChild, pointsProvider),
+    );
+  }
+
+  Widget _buildRegularMode(List<Child> filteredChildren, List<String> groups,
+      Child? selectedChild, PointsProvider pointsProvider) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Child info header
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Row(
-              children: [
-                CircleAvatar(
-                  radius: 24,
-                  backgroundColor: AppColors.primaryLight,
-                  child: Text(
-                    child.name.isNotEmpty ? child.name[0].toUpperCase() : 'C',
-                    style: const TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        child.name,
-                        style: AppTextStyles.heading3.copyWith(fontSize: 18),
-                      ),
-                      Text(
-                        'Age: ${child.age} • ${child.groupName}',
-                        style: AppTextStyles.bodySmall,
-                      ),
-                    ],
-                  ),
-                ),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: AppColors.accentLight.withOpacity(0.2),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(
-                        Icons.emoji_events,
-                        size: 16,
-                        color: AppColors.accent,
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        '$totalPoints pts',
-                        style: const TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 14,
-                          color: AppColors.accent,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          // Points buttons
-          Container(
-            height: 84,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            decoration: BoxDecoration(
-              color: Colors.grey.shade50,
-              borderRadius: const BorderRadius.only(
-                bottomLeft: Radius.circular(16),
-                bottomRight: Radius.circular(16),
+          // Group filter
+          if (groups.isNotEmpty) ...[
+            const Text(
+              'Filter by Group',
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 16,
               ),
             ),
-            child: Column(
-              children: [
-                const Row(
-                  mainAxisAlignment: MainAxisAlignment.start,
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.grey.shade300),
+              ),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<String>(
+                  value: _selectedGroup,
+                  isExpanded: true,
+                  hint: const Text('All Groups'),
+                  items: [
+                    const DropdownMenuItem<String>(
+                      value: null,
+                      child: Text('All Groups'),
+                    ),
+                    for (final group in groups)
+                      DropdownMenuItem<String>(
+                        value: group,
+                        child: Text(group),
+                      ),
+                  ],
+                  onChanged: (value) {
+                    setState(() {
+                      _selectedGroup = value;
+                      // Clear selected child if changing groups
+                      if (_selectedChildId != null) {
+                        final childStillInGroup = filteredChildren
+                            .any((c) => c.id == _selectedChildId);
+                        if (!childStillInGroup) {
+                          _selectedChildId = null;
+                        }
+                      }
+                    });
+                  },
+                ),
+              ),
+            ),
+            const SizedBox(height: 24),
+          ],
+
+          // Child selection
+          const Text(
+            'Select Child',
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              fontSize: 16,
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          if (filteredChildren.isEmpty)
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
                   children: [
                     Icon(
-                      Icons.add_circle,
-                      size: 14,
-                      color: AppColors.textSecondary,
+                      Icons.people_outline,
+                      size: 48,
+                      color: Colors.grey.shade400,
                     ),
-                    SizedBox(width: 4),
+                    const SizedBox(height: 16),
                     Text(
-                      'Add Points:',
+                      _selectedGroup != null
+                          ? 'No children in ${_selectedGroup!} group'
+                          : 'No children added yet',
+                      style: const TextStyle(
+                        fontSize: 16,
+                        color: Colors.grey,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
+              ),
+            )
+          else
+            Container(
+              height: 120,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.grey.shade300),
+              ),
+              child: ListView.builder(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                scrollDirection: Axis.horizontal,
+                itemCount: filteredChildren.length,
+                itemBuilder: (ctx, index) {
+                  final child = filteredChildren[index];
+                  final isSelected = child.id == _selectedChildId;
+                  final totalPoints =
+                      pointsProvider.getChildTotalPoints(child.id!);
+
+                  return GestureDetector(
+                    onTap: () {
+                      setState(() {
+                        _selectedChildId = child.id;
+                      });
+                    },
+                    child: Container(
+                      width: 100,
+                      margin: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: isSelected
+                            ? AppColors.primaryLight.withOpacity(0.2)
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: isSelected
+                              ? AppColors.primary
+                              : Colors.transparent,
+                          width: 2,
+                        ),
+                      ),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          CircleAvatar(
+                            backgroundColor:
+                                AppColors.primaryLight.withOpacity(0.2),
+                            radius: 24,
+                            child: Text(
+                              child.name.isNotEmpty
+                                  ? child.name[0].toUpperCase()
+                                  : '?',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: AppColors.primary,
+                                fontSize: 20,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            child.name,
+                            textAlign: TextAlign.center,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                          Text(
+                            '$totalPoints pts',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: AppColors.textSecondary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+
+          const SizedBox(height: 24),
+
+          // Points and reason
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Points input
+              Expanded(
+                flex: 2,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Points',
                       style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        color: AppColors.textSecondary,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.grey.shade300),
+                      ),
+                      child: TextField(
+                        controller: _pointsController,
+                        decoration: const InputDecoration(
+                          border: InputBorder.none,
+                          hintText: 'Points',
+                        ),
+                        keyboardType: TextInputType.number,
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 8),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              ),
+              const SizedBox(width: 16),
+
+              // Reason input
+              Expanded(
+                flex: 3,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _buildPointButton(context, 5, child.id!),
-                    _buildPointButton(context, 10, child.id!),
-                    _buildPointButton(context, 15, child.id!),
-                    _buildPointButton(context, 20, child.id!),
-                    _buildPointButton(context, 30, child.id!),
-                    _buildCustomPointButton(context, child.id!),
+                    const Text(
+                      'Reason (Optional)',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.grey.shade300),
+                      ),
+                      child: TextField(
+                        controller: _reasonController,
+                        decoration: const InputDecoration(
+                          border: InputBorder.none,
+                          hintText: 'Reason for points',
+                        ),
+                      ),
+                    ),
                   ],
                 ),
-              ],
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 32),
+
+          // Add button
+          Center(
+            child: ElevatedButton(
+              onPressed: _selectedChildId == null
+                  ? null
+                  : () => _addPoints(pointsProvider),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 40, vertical: 16),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                disabledBackgroundColor: Colors.grey.shade400,
+              ),
+              child: const Text(
+                'Add Points',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
             ),
           ),
         ],
@@ -403,174 +410,286 @@ class PointsChildListItem extends StatelessWidget {
     );
   }
 
-  Widget _buildPointButton(BuildContext context, int points, int childId) {
-    return ElevatedButton(
-      onPressed: () {
-        Provider.of<PointsProvider>(context, listen: false)
-            .addPoints(childId, points);
-
-        _showPointsAddedSnackbar(context, points);
-      },
-      style: ElevatedButton.styleFrom(
-        backgroundColor: AppColors.accent,
-        foregroundColor: Colors.white,
-        elevation: 0,
-        padding: EdgeInsets.zero,
-        minimumSize: const Size(42, 36),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(8),
-        ),
-      ),
-      child: Text(
-        '+$points',
-        style: const TextStyle(
-          fontSize: 14,
-          fontWeight: FontWeight.bold,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildCustomPointButton(BuildContext context, int childId) {
-    return ElevatedButton(
-      onPressed: () => _showCustomPointsDialog(context, childId),
-      style: ElevatedButton.styleFrom(
-        backgroundColor: Colors.grey.shade200,
-        foregroundColor: AppColors.textPrimary,
-        elevation: 0,
-        padding: EdgeInsets.zero,
-        minimumSize: const Size(42, 36),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(8),
-        ),
-      ),
-      child: const Icon(
-        Icons.add,
-        size: 20,
-      ),
-    );
-  }
-
-  void _showCustomPointsDialog(BuildContext context, int childId) {
-    final controller = TextEditingController();
-    final reasonController = TextEditingController();
-    bool isValid = false;
-
-    showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (context, setState) {
-          return AlertDialog(
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-            ),
-            title: const Text(
-              'Add Custom Points',
-              style: AppTextStyles.heading3,
-            ),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: controller,
-                  keyboardType: TextInputType.number,
-                  decoration: InputDecoration(
-                    labelText: 'Points',
-                    hintText: 'Enter points',
-                    floatingLabelStyle: const TextStyle(color: AppColors.accent),
-                    focusedBorder: const UnderlineInputBorder(
-                      borderSide: BorderSide(color: AppColors.accent),
+  Widget _buildQuickMode(List<Child> filteredChildren, List<String> groups,
+      PointsProvider pointsProvider) {
+    return Column(
+      children: [
+        // Top control bar
+        Container(
+          padding: const EdgeInsets.all(16),
+          color: Colors.white,
+          child: Row(
+            children: [
+              // Group filter
+              if (groups.isNotEmpty)
+                Expanded(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: Colors.grey.shade300),
                     ),
-                    errorText: controller.text.isNotEmpty &&
-                            (int.tryParse(controller.text) ?? 0) <= 0
-                        ? 'Please enter a positive number'
-                        : null,
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<String>(
+                        value: _selectedGroup,
+                        isExpanded: true,
+                        hint: const Text('All Groups'),
+                        items: [
+                          const DropdownMenuItem<String>(
+                            value: null,
+                            child: Text('All Groups'),
+                          ),
+                          for (final group in groups)
+                            DropdownMenuItem<String>(
+                              value: group,
+                              child: Text(group),
+                            ),
+                        ],
+                        onChanged: (value) {
+                          setState(() {
+                            _selectedGroup = value;
+                          });
+                        },
+                      ),
+                    ),
                   ),
-                  onChanged: (value) {
-                    final points = int.tryParse(value) ?? 0;
-                    setState(() {
-                      isValid = points > 0;
-                    });
-                  },
                 ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: reasonController,
+              const SizedBox(width: 12),
+
+              // Points & reason
+              Container(
+                width: 80,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.grey.shade300),
+                ),
+                child: TextField(
+                  controller: _pointsController,
                   decoration: const InputDecoration(
-                    labelText: 'Reason (optional)',
-                    hintText: 'Why are points being added?',
-                    floatingLabelStyle: TextStyle(color: AppColors.accent),
-                    focusedBorder: UnderlineInputBorder(
-                      borderSide: BorderSide(color: AppColors.accent),
-                    ),
+                    border: InputBorder.none,
+                    hintText: 'Points',
                   ),
-                ),
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () {
-                  Navigator.of(ctx).pop();
-                },
-                child: const Text(
-                  'Cancel',
-                  style: TextStyle(color: AppColors.textSecondary),
+                  keyboardType: TextInputType.number,
+                  textAlign: TextAlign.center,
                 ),
               ),
-              ElevatedButton(
-                onPressed: isValid
-                    ? () {
-                        final points = int.parse(controller.text);
-                        final reason = reasonController.text.isEmpty
-                            ? null
-                            : reasonController.text;
-
-                        Provider.of<PointsProvider>(context, listen: false)
-                            .addPoints(childId, points, reason: reason);
-
-                        Navigator.of(ctx).pop();
-                        _showPointsAddedSnackbar(context, points);
-                      }
-                    : null,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.accent,
-                  disabledBackgroundColor: Colors.grey.shade300,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
+              const SizedBox(width: 12),
+              Container(
+                width: 140,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.grey.shade300),
+                ),
+                child: TextField(
+                  controller: _reasonController,
+                  decoration: const InputDecoration(
+                    border: InputBorder.none,
+                    hintText: 'Reason',
                   ),
                 ),
-                child: const Text('Add'),
               ),
             ],
-          );
-        },
-      ),
+          ),
+        ),
+
+        // Children grid
+        Expanded(
+          child: filteredChildren.isEmpty
+              ? Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        Icons.people_outline,
+                        size: 64,
+                        color: Colors.grey.shade400,
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        _selectedGroup != null
+                            ? 'No children in ${_selectedGroup!} group'
+                            : 'No children added yet',
+                        style: const TextStyle(
+                          fontSize: 16,
+                          color: Colors.grey,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
+                  ),
+                )
+              : GridView.builder(
+                  padding: const EdgeInsets.all(16),
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 3,
+                    childAspectRatio: 0.8,
+                    crossAxisSpacing: 10,
+                    mainAxisSpacing: 10,
+                  ),
+                  itemCount: filteredChildren.length,
+                  itemBuilder: (ctx, index) {
+                    final child = filteredChildren[index];
+                    final totalPoints =
+                        pointsProvider.getChildTotalPoints(child.id!);
+
+                    return InkWell(
+                      onTap: () => _quickAddPoints(child.id!, pointsProvider),
+                      borderRadius: BorderRadius.circular(12),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.05),
+                              blurRadius: 8,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            CircleAvatar(
+                              backgroundColor:
+                                  AppColors.primaryLight.withOpacity(0.2),
+                              radius: 32,
+                              child: Text(
+                                child.name.isNotEmpty
+                                    ? child.name[0].toUpperCase()
+                                    : '?',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  color: AppColors.primary,
+                                  fontSize: 24,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            Text(
+                              child.name,
+                              textAlign: TextAlign.center,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w500,
+                                fontSize: 14,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              '$totalPoints points',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: AppColors.textSecondary,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+        ),
+      ],
     );
   }
 
-  void _showPointsAddedSnackbar(BuildContext context, int points) {
-    ScaffoldMessenger.of(context).hideCurrentSnackBar();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            const Icon(
-              Icons.check_circle,
-              color: Colors.white,
-            ),
-            const SizedBox(width: 12),
-            Text('Added $points points'),
-          ],
+  Future<void> _addPoints(PointsProvider pointsProvider) async {
+    if (_selectedChildId == null) return;
+
+    // Validate points input
+    final points = int.tryParse(_pointsController.text.trim());
+    if (points == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please enter a valid number of points'),
+          behavior: SnackBarBehavior.floating,
         ),
-        backgroundColor: AppColors.success,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(10),
+      );
+      return;
+    }
+
+    // Get reason if any
+    final reason = _reasonController.text.trim();
+
+    try {
+      await pointsProvider.addPoints(
+          _selectedChildId!, points, reason.isEmpty ? null : reason);
+
+      if (!mounted) return;
+
+      // Show success message
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Added $points points'),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: AppColors.success,
         ),
-        margin: const EdgeInsets.all(16),
-        duration: const Duration(seconds: 1),
-      ),
-    );
+      );
+
+      // Reset form
+      _pointsController.text = '1';
+      _reasonController.clear();
+      setState(() {
+        _selectedChildId = null;
+      });
+    } catch (e) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error: $e'),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  Future<void> _quickAddPoints(
+      int childId, PointsProvider pointsProvider) async {
+    // Validate points input
+    final points = int.tryParse(_pointsController.text.trim());
+    if (points == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please enter a valid number of points'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    // Get reason if any
+    final reason = _reasonController.text.trim();
+
+    try {
+      await pointsProvider.addPoints(
+          childId, points, reason.isEmpty ? null : reason);
+
+      if (!mounted) return;
+
+      // Show success message
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Added $points points'),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: AppColors.success,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error: $e'),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 }
