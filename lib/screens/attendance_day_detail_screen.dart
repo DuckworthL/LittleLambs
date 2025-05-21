@@ -1,301 +1,516 @@
-import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
-import 'package:sqflite/sqflite.dart';
-import '../models/attendance.dart';
-import '../helpers/database_helper.dart';
+import '../constants/app_colors.dart';
+import '../constants/app_text_styles.dart';
+import '../providers/attendance_provider.dart';
+import '../providers/children_provider.dart';
 import '../utils/logger.dart';
+import '../models/child.dart';
 
-class AttendanceProvider with ChangeNotifier {
-  final Map<String, Map<int, bool>> _attendanceData = {};
+class AttendanceDayDetailScreen extends StatefulWidget {
+  final DateTime date;
+  final String formattedDate;
+  final int attendanceCount;
 
-  // Track archived months
-  final List<Map<String, dynamic>> _archivedMonths = [];
+  const AttendanceDayDetailScreen({
+    super.key,
+    required this.date,
+    required this.formattedDate,
+    required this.attendanceCount,
+  });
 
-  // Getter for archived months
-  List<Map<String, dynamic>> get archivedMonths => _archivedMonths;
+  @override
+  State<AttendanceDayDetailScreen> createState() =>
+      _AttendanceDayDetailScreenState();
+}
 
-  Map<String, Map<int, bool>> get attendanceData => _attendanceData;
+class _AttendanceDayDetailScreenState extends State<AttendanceDayDetailScreen> {
+  bool _isLoading = true;
+  List<Map<String, dynamic>> _attendanceRecords = [];
+  String? _errorMessage;
 
-  String get todayFormatted {
-    return DateFormat('yyyy-MM-dd').format(DateTime.now());
+  @override
+  void initState() {
+    super.initState();
+    _loadAttendanceData();
   }
 
-  // Get nearest service day (Saturday or Sunday)
-  String get currentServiceDate {
-    final now = DateTime.now();
+  Future<void> _loadAttendanceData() async {
+    setState(() => _isLoading = true);
 
-    // If today is Saturday or Sunday, return today's date
-    if (now.weekday == DateTime.saturday || now.weekday == DateTime.sunday) {
-      return DateFormat('yyyy-MM-dd').format(now);
-    }
-
-    // Calculate days to Saturday and Sunday
-    final daysToSaturday = (DateTime.saturday - now.weekday) % 7;
-    final daysToSunday = (DateTime.sunday - now.weekday) % 7;
-
-    // Return the closest upcoming service date
-    final daysToClosestService =
-        daysToSaturday < daysToSunday ? daysToSaturday : daysToSunday;
-
-    final nextServiceDay = now.add(Duration(days: daysToClosestService));
-    return DateFormat('yyyy-MM-dd').format(nextServiceDay);
-  }
-
-  Future<void> fetchAttendanceForDate(String date) async {
-    final attendanceData =
-        await DatabaseHelper.instance.queryAttendanceForDate(date);
-    Map<int, bool> childAttendance = {};
-
-    for (var item in attendanceData) {
-      childAttendance[item['childId'] as int] = item['isPresent'] == 1;
-    }
-
-    _attendanceData[date] = childAttendance;
-    notifyListeners();
-  }
-
-  Future<void> markAttendance(int childId, String date, bool isPresent) async {
-    final attendance = Attendance(
-      childId: childId,
-      date: date,
-      isPresent: isPresent,
-    );
-
-    await DatabaseHelper.instance.insertOrUpdateAttendance(attendance.toMap());
-
-    // Update local state
-    if (_attendanceData.containsKey(date)) {
-      _attendanceData[date]![childId] = isPresent;
-    } else {
-      _attendanceData[date] = {childId: isPresent};
-    }
-
-    notifyListeners();
-  }
-
-  // Add setAttendance method to match what's used in the Detail Screen
-  Future<void> setAttendance({
-    required int childId,
-    required String date,
-    required bool isPresent,
-  }) async {
     try {
-      // This is just a wrapper around the existing markAttendance method
-      await markAttendance(childId, date, isPresent);
-    } catch (e) {
-      Logger.error('Error setting attendance', e);
-      rethrow;
-    }
-  }
+      final dateStr = DateFormat('yyyy-MM-dd').format(widget.date);
+      final attendanceProvider =
+          Provider.of<AttendanceProvider>(context, listen: false);
+      final childrenProvider =
+          Provider.of<ChildrenProvider>(context, listen: false);
 
-  bool isChildPresent(int childId, String date) {
-    if (_attendanceData.containsKey(date) &&
-        _attendanceData[date]!.containsKey(childId)) {
-      return _attendanceData[date]![childId]!;
-    }
-    return false;
-  }
+      // Load attendance data for this date
+      await attendanceProvider.fetchAttendanceForDate(dateStr);
 
-  // Get count of present children for a specific date
-  int getPresentCountForDate(String date) {
-    if (!_attendanceData.containsKey(date)) {
-      return 0;
-    }
+      // Make sure children data is loaded
+      await childrenProvider.fetchAndSetChildren();
 
-    int count = 0;
-    _attendanceData[date]!.forEach((_, isPresent) {
-      if (isPresent) count++;
-    });
+      // Combine data from both providers
+      final attendanceData = attendanceProvider.attendanceData[dateStr] ?? {};
+      final List<Map<String, dynamic>> records = [];
 
-    return count;
-  }
-
-  Future<Map<String, int>> getMonthlyAttendanceCount(
-      int year, int month) async {
-    try {
-      final yearMonth = DateFormat('yyyy-MM').format(DateTime(year, month));
-      final data =
-          await DatabaseHelper.instance.queryAttendanceByMonth(yearMonth);
-
-      Map<String, int> dateCountMap = {};
-
-      for (var item in data) {
-        final date = item['date'] as String;
-        final isPresent = item['isPresent'] as int;
-
-        if (isPresent == 1) {
-          if (dateCountMap.containsKey(date)) {
-            dateCountMap[date] = dateCountMap[date]! + 1;
-          } else {
-            dateCountMap[date] = 1;
-          }
-        }
-      }
-
-      return dateCountMap;
-    } catch (e) {
-      Logger.error('Error getting monthly attendance', e);
-      return {};
-    }
-  }
-
-  Future<Map<int, int>> getAttendanceCountByChild(
-      List<int> childrenIds, String startDate, String endDate) async {
-    try {
-      Database db = await DatabaseHelper.instance.database;
-      Map<int, int> result = {};
-
-      for (var childId in childrenIds) {
-        var count = await db.rawQuery('''
-          SELECT COUNT(*) as count
-          FROM attendance
-          WHERE childId = ?
-          AND date BETWEEN ? AND ?
-          AND isPresent = 1
-        ''', [childId, startDate, endDate]);
-
-        result[childId] = count.first['count'] as int;
-      }
-
-      return result;
-    } catch (e) {
-      Logger.error('Error getting attendance count by child', e);
-      return {};
-    }
-  }
-
-  // Method to check if a month is archived
-  bool isMonthArchived(int year, int month) {
-    final monthKey = '$year-${month.toString().padLeft(2, '0')}';
-    return _archivedMonths.any((m) => m['key'] == monthKey);
-  }
-
-  // Method to load archived months from database
-  Future<void> loadArchivedMonths() async {
-    try {
-      Database db = await DatabaseHelper.instance.database;
-
-      // Check if archived_months table exists, if not create it
-      await db.execute('''
-        CREATE TABLE IF NOT EXISTS archived_months (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          year INTEGER NOT NULL,
-          month INTEGER NOT NULL,
-          archived_date TEXT NOT NULL
-        )
-      ''');
-
-      final List<Map<String, dynamic>> archivedData =
-          await db.query('archived_months');
-
-      _archivedMonths.clear();
-      for (var item in archivedData) {
-        final year = item['year'] as int;
-        final month = item['month'] as int;
-
-        _archivedMonths.add({
-          'year': year,
-          'month': month,
-          'key': '$year-${month.toString().padLeft(2, '0')}',
-          'archived_date': item['archived_date'],
+      for (var child in childrenProvider.children) {
+        final isPresent = attendanceData[child.id ?? 0] ?? false;
+        records.add({
+          'child': child,
+          'isPresent': isPresent,
         });
       }
 
-      notifyListeners();
+      if (mounted) {
+        setState(() {
+          _attendanceRecords = records;
+          _isLoading = false;
+        });
+      }
     } catch (e) {
-      Logger.error('Error loading archived months', e);
+      Logger.error('Error loading attendance data for date', e);
+
+      if (mounted) {
+        setState(() {
+          _errorMessage = 'Failed to load attendance data: $e';
+          _isLoading = false;
+        });
+      }
     }
   }
 
-  // Method to archive a month's reports
-  Future<void> archiveMonthReport(int year, int month) async {
-    try {
-      if (isMonthArchived(year, month)) {
-        // Already archived
-        return;
-      }
+  @override
+  Widget build(BuildContext context) {
+    // Sort records by present then alphabetically
+    _attendanceRecords.sort((a, b) {
+      // Sort by attendance status first (present before absent)
+      if (a['isPresent'] && !b['isPresent']) return -1;
+      if (!a['isPresent'] && b['isPresent']) return 1;
 
-      Database db = await DatabaseHelper.instance.database;
-      final now = DateTime.now();
-      final archivedDate = DateFormat('yyyy-MM-dd').format(now);
+      // Then sort by name
+      final childA = a['child'] as Child;
+      final childB = b['child'] as Child;
+      return childA.name.compareTo(childB.name);
+    });
 
-      // Insert into archived_months table
-      await db.insert('archived_months', {
-        'year': year,
-        'month': month,
-        'archived_date': archivedDate,
-      });
+    // Count present children
+    final presentCount =
+        _attendanceRecords.where((record) => record['isPresent']).length;
+    final totalChildren = _attendanceRecords.length;
 
-      // Update local state
-      _archivedMonths.add({
-        'year': year,
-        'month': month,
-        'key': '$year-${month.toString().padLeft(2, '0')}',
-        'archived_date': archivedDate,
-      });
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      appBar: AppBar(
+        title: Text(DateFormat('MMM d, yyyy').format(widget.date)),
+        backgroundColor: AppColors.primary,
+        foregroundColor: Colors.white,
+        elevation: 0,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            tooltip: 'Refresh',
+            onPressed: _loadAttendanceData,
+          ),
+        ],
+      ),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : _errorMessage != null
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(
+                          Icons.error_outline,
+                          color: AppColors.error,
+                          size: 48,
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          _errorMessage!,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: AppColors.error),
+                        ),
+                        const SizedBox(height: 16),
+                        ElevatedButton.icon(
+                          onPressed: _loadAttendanceData,
+                          icon: const Icon(Icons.refresh),
+                          label: const Text('Retry'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.primary,
+                            foregroundColor: Colors.white,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+              : CustomScrollView(
+                  slivers: [
+                    // Summary section
+                    SliverToBoxAdapter(
+                      child: Container(
+                        margin: const EdgeInsets.all(16),
+                        padding: const EdgeInsets.all(20),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(16),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.05),
+                              blurRadius: 8,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text(
+                                      'Service Summary',
+                                      style: AppTextStyles.heading3,
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      widget.formattedDate,
+                                      style: const TextStyle(
+                                        color: AppColors.textSecondary,
+                                        fontSize: 14,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 16,
+                                    vertical: 8,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: AppColors.primary.withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
+                                  child: Text(
+                                    '$presentCount / $totalChildren',
+                                    style: const TextStyle(
+                                      color: AppColors.primary,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 16,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 20),
+                            // Wrap LinearProgressIndicator in ClipRRect for rounded corners
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(4),
+                              child: LinearProgressIndicator(
+                                value: totalChildren > 0
+                                    ? presentCount / totalChildren
+                                    : 0,
+                                backgroundColor: Colors.grey.shade200,
+                                color: AppColors.primary,
+                                minHeight: 8,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              'Attendance: ${totalChildren > 0 ? (presentCount / totalChildren * 100).round() : 0}%',
+                              style: const TextStyle(
+                                color: AppColors.textSecondary,
+                                fontSize: 14,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
 
-      Logger.log('Archived report for $month/$year');
-      notifyListeners();
-    } catch (e) {
-      Logger.error('Error archiving month report', e);
-      throw Exception('Failed to archive report: $e');
-    }
-  }
+                    // Attendance list header
+                    const SliverToBoxAdapter(
+                      child: Padding(
+                        padding: EdgeInsets.fromLTRB(16, 8, 16, 12),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.people,
+                              size: 16,
+                              color: AppColors.textSecondary,
+                            ),
+                            SizedBox(width: 8),
+                            Text(
+                              'Attendance List',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w600,
+                                fontSize: 16,
+                                color: AppColors.textPrimary,
+                              ),
+                            ),
+                            SizedBox(width: 8),
+                            Expanded(
+                              child: Divider(),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
 
-  // Method to restore a month's reports from archive
-  Future<void> restoreMonthReport(int year, int month) async {
-    try {
-      if (!isMonthArchived(year, month)) {
-        // Not archived
-        return;
-      }
+                    // Present children list
+                    if (presentCount > 0)
+                      SliverToBoxAdapter(
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                          child: Text(
+                            'Present ($presentCount)',
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w500,
+                              color: AppColors.success,
+                            ),
+                          ),
+                        ),
+                      ),
 
-      Database db = await DatabaseHelper.instance.database;
+                    // Present children list items
+                    if (presentCount > 0)
+                      SliverList(
+                        delegate: SliverChildBuilderDelegate(
+                          (context, index) {
+                            final records = _attendanceRecords
+                                .where((r) => r['isPresent'])
+                                .toList();
+                            if (index >= records.length) return null;
 
-      // Remove from archived_months table
-      await db.delete('archived_months',
-          where: 'year = ? AND month = ?', whereArgs: [year, month]);
+                            final record = records[index];
+                            final child = record['child'] as Child;
 
-      // Update local state
-      final monthKey = '$year-${month.toString().padLeft(2, '0')}';
-      _archivedMonths.removeWhere((m) => m['key'] == monthKey);
+                            return Container(
+                              margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: AppColors.success.withOpacity(0.3),
+                                  width: 1,
+                                ),
+                              ),
+                              child: Padding(
+                                padding: const EdgeInsets.all(12),
+                                child: Row(
+                                  children: [
+                                    // Avatar
+                                    CircleAvatar(
+                                      backgroundColor:
+                                          AppColors.success.withOpacity(0.1),
+                                      child: Text(
+                                        child.name.isNotEmpty
+                                            ? child.name[0].toUpperCase()
+                                            : '?',
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          color: AppColors.success,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 16),
 
-      Logger.log('Restored report for $month/$year');
-      notifyListeners();
-    } catch (e) {
-      Logger.error('Error restoring month report', e);
-      throw Exception('Failed to restore report: $e');
-    }
-  }
+                                    // Child details
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            child.name,
+                                            style: const TextStyle(
+                                              fontWeight: FontWeight.w500,
+                                              fontSize: 16,
+                                            ),
+                                          ),
+                                          Text(
+                                            '${child.groupName} • Age: ${child.age}',
+                                            style: const TextStyle(
+                                              fontSize: 14,
+                                              color: AppColors.textSecondary,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
 
-  // Method to delete a month's reports
-  Future<void> deleteMonthReport(int year, int month) async {
-    try {
-      Database db = await DatabaseHelper.instance.database;
-      final yearMonth = DateFormat('yyyy-MM').format(DateTime(year, month));
+                                    // Present indicator
+                                    const Icon(
+                                      Icons.check_circle,
+                                      color: AppColors.success,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                          childCount: _attendanceRecords
+                              .where((r) => r['isPresent'])
+                              .length,
+                        ),
+                      ),
 
-      // Delete attendance records for this month
-      await db.delete('attendance', where: "date LIKE '$yearMonth%'");
+                    // Absent children header
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                        child: Text(
+                          'Absent (${totalChildren - presentCount})',
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                            color: AppColors.error,
+                          ),
+                        ),
+                      ),
+                    ),
 
-      // If it was archived, also remove from archived_months
-      if (isMonthArchived(year, month)) {
-        await db.delete('archived_months',
-            where: 'year = ? AND month = ?', whereArgs: [year, month]);
+                    // Absent children list
+                    SliverList(
+                      delegate: SliverChildBuilderDelegate(
+                        (context, index) {
+                          final records = _attendanceRecords
+                              .where((r) => !r['isPresent'])
+                              .toList();
+                          if (index >= records.length) return null;
 
-        // Update local state for archived months
-        final monthKey = '$year-${month.toString().padLeft(2, '0')}';
-        _archivedMonths.removeWhere((m) => m['key'] == monthKey);
-      }
+                          final record = records[index];
+                          final child = record['child'] as Child;
 
-      // Clear local state for this month if any
-      final pattern = RegExp('^$yearMonth');
-      _attendanceData.removeWhere((key, _) => pattern.hasMatch(key));
+                          return Container(
+                            margin: EdgeInsets.fromLTRB(16, 0, 16,
+                                index == records.length - 1 ? 24 : 8),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: Colors.grey.shade300,
+                                width: 1,
+                              ),
+                            ),
+                            child: Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: Row(
+                                children: [
+                                  // Avatar
+                                  CircleAvatar(
+                                    backgroundColor: Colors.grey.shade100,
+                                    child: Text(
+                                      child.name.isNotEmpty
+                                          ? child.name[0].toUpperCase()
+                                          : '?',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.grey.shade600,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 16),
 
-      Logger.log('Deleted report for $month/$year');
-      notifyListeners();
-    } catch (e) {
-      Logger.error('Error deleting month report', e);
-      throw Exception('Failed to delete report: $e');
-    }
+                                  // Child details
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          child.name,
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.w500,
+                                            fontSize: 16,
+                                            color: Colors.grey.shade800,
+                                          ),
+                                        ),
+                                        Text(
+                                          '${child.groupName} • Age: ${child.age}',
+                                          style: const TextStyle(
+                                            fontSize: 14,
+                                            color: AppColors.textSecondary,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+
+                                  // Mark Present button - for upcoming services
+                                  if (DateTime.now()
+                                          .difference(widget.date)
+                                          .inDays <=
+                                      0)
+                                    IconButton(
+                                      icon: const Icon(
+                                          Icons.check_circle_outline),
+                                      color: Colors.grey.shade400,
+                                      onPressed: () async {
+                                        final dateStr = DateFormat('yyyy-MM-dd')
+                                            .format(widget.date);
+                                        final attendanceProvider =
+                                            Provider.of<AttendanceProvider>(
+                                                context,
+                                                listen: false);
+                                        final isContextMounted =
+                                            context.mounted;
+                                        final scaffoldMsgr =
+                                            ScaffoldMessenger.of(context);
+
+                                        try {
+                                          await attendanceProvider
+                                              .setAttendance(
+                                            childId: child.id ?? 0,
+                                            date: dateStr,
+                                            isPresent: true,
+                                          );
+
+                                          if (isContextMounted && mounted) {
+                                            _loadAttendanceData();
+                                          }
+                                        } catch (e) {
+                                          // Show error
+                                          if (isContextMounted && mounted) {
+                                            scaffoldMsgr.showSnackBar(
+                                              SnackBar(
+                                                content: Text('Error: $e'),
+                                                backgroundColor: Colors.red,
+                                              ),
+                                            );
+                                          }
+                                        }
+                                      },
+                                    )
+                                  // Absent indicator for past services
+                                  else
+                                    Icon(
+                                      Icons.remove_circle,
+                                      color: Colors.grey.shade400,
+                                    ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                        childCount: _attendanceRecords
+                            .where((r) => !r['isPresent'])
+                            .length,
+                      ),
+                    ),
+                  ],
+                ),
+    );
   }
 }

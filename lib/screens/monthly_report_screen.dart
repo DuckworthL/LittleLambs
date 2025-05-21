@@ -232,6 +232,7 @@ class _MonthlyReportScreenState extends State<MonthlyReportScreen> {
           TextButton(
             onPressed: () async {
               try {
+                // Implement the actual archiving functionality
                 final attendanceProvider =
                     Provider.of<AttendanceProvider>(context, listen: false);
                 final navigatorContext = Navigator.of(ctx);
@@ -547,7 +548,7 @@ class _MonthlyReportScreenState extends State<MonthlyReportScreen> {
                         child: Material(
                           color: Colors.transparent,
                           child: InkWell(
-                            // KEY FIX: Allow tapping on all services in current month
+                            // Fixed: Use the correct way to reference AttendanceDayDetailScreen
                             onTap: canAccess
                                 ? () {
                                     Navigator.push(
@@ -557,7 +558,6 @@ class _MonthlyReportScreenState extends State<MonthlyReportScreen> {
                                             AttendanceDayDetailScreen(
                                           date: date,
                                           formattedDate: formattedDate,
-                                          // For upcoming services in current month, show 0 attendance
                                           attendanceCount: count,
                                         ),
                                       ),
