@@ -681,7 +681,7 @@ class _MonthlyReportScreenState extends State<MonthlyReportScreen> {
                                                   : isUpcomingService
                                                       ? 'Upcoming service (accessible)'
                                                       : (count > 0
-                                                          ? '$count children present'
+                                                          ? '$count students present' // Changed from 'children' to 'students'
                                                           : 'No attendance recorded'),
                                               style: TextStyle(
                                                 fontSize: 12,
